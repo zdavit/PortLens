@@ -55,15 +55,18 @@ If Ollama is not running, the scan still completes and reports a clear warning f
 
 Launch the dashboard with `python3 scanner.py --interactive` to get a full-screen terminal UI similar to a lightweight `btop` workflow.
 
+Interactive mode now starts with a quick `localhost` scan over ports `1-100` so the screen feels responsive immediately. Press `d` any time to switch back to the auto-detected local subnet for a broader scan.
+
 - `r` starts a scan
 - `t` edits the target host or subnet
 - `p` edits the port range
+- `o` toggles between open-only and open-plus-closed educational port view
 - `a` toggles AI analysis
 - `d` restores the auto-detected local subnet
 - `j` and `k` move through detected services
 - `q` exits the dashboard
 
-The dashboard keeps scans running in the background, shows live status updates, lists open services in a table, and displays per-service details plus the AI-generated security analysis in a side pane.
+The dashboard keeps scans running in the background, shows live status updates, lists open services in a table, and displays per-service details with an AI-generated explanation for only the currently selected port.
 
 ## Validation
 
