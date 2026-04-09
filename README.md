@@ -8,6 +8,13 @@ I am building a smart network scanner that analyzes a target system or local net
 
 To build this project, I will speak to the agent in a question-answer type of feedback to iteratively generate, test, and refine the application. The agent will be guided by structured prompts to implement features step-by-step, and I will provide feedback based on runtime behavior, error messages, and expected outputs. Feedback mechanisms will include testing scans on known targets (such as localhost), validating that detected services match expected results, and ensuring the AI explanations are accurate and relevant. I will also use the agent to review and improve code structure, readability, and documentation, allowing for continuous refinement and a higher-quality final product.
 
+## Week 13
+
+So far AMP has been pretty helpful and smart about its ideas and suggestions. Everything works pretty well but there's still a vast amount of things I want done before I'm satisfied. The port scanning works well and the toggles for open and closed ports work too. The local Ollama ai gives good suggestions and when it summarizes the port stuff it is pretty information dense. For next week I want more features like network device mapping and potentially expanding this to be a web interface instead of just CLI (even though CLIs are just awesome).
+
+I haven't really thrown anything super complicated at the AI so far so it's been able to handle most things. Therefore I can't really speak on the "smartest" or "dumbest" things its done because those things aren't very far apart in terms of complexity. https://ampcode.com/threads/T-019d7017-01e5-779d-bd5a-1553cde7fcfb Here is the main thread I've been working with it and its been pretty easy. I've chosen to not use agentic looping since that was a real pain last time and instead just talk to AMP normally, I've found that that has been a good way to work with it. 
+
+
 ## Features
 
 - Port scanning with service and version detection (powered by nmap)
