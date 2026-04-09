@@ -13,6 +13,8 @@ To build this project, I will speak to the agent in a question-answer type of fe
 - Port scanning with service and version detection (powered by nmap)
 - Risk level assignment (Critical / High / Medium / Low) for detected services
 - AI-powered security analysis explaining each service, its risks, and how to secure it
+- Friendly failure messages when `nmap` or Ollama are unavailable
+- Localhost validation script for checking scan output against expected services
 - Fully local — no API keys or cloud services required
 
 ## Prerequisites
@@ -31,6 +33,9 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
+# Launch the full-screen interactive dashboard
+python3 scanner.py --interactive
+
 # Scan localhost (default port range 1-1024)
 python3 scanner.py localhost
 
@@ -42,6 +47,37 @@ python3 scanner.py
 
 # Scan without AI analysis
 python3 scanner.py localhost --no-ai
+```
+
+If Ollama is not running, the scan still completes and reports a clear warning for the AI step instead of crashing.
+
+## Interactive Dashboard
+
+Launch the dashboard with `python3 scanner.py --interactive` to get a full-screen terminal UI similar to a lightweight `btop` workflow.
+
+- `r` starts a scan
+- `t` edits the target host or subnet
+- `p` edits the port range
+- `a` toggles AI analysis
+- `d` restores the auto-detected local subnet
+- `j` and `k` move through detected services
+- `q` exits the dashboard
+
+The dashboard keeps scans running in the background, shows live status updates, lists open services in a table, and displays per-service details plus the AI-generated security analysis in a side pane.
+
+## Validation
+
+Use the validation script to confirm the localhost scan path still works and that expected services are detected.
+
+```bash
+# Validate the scan structure only
+python3 validate_localhost.py -p 1-100
+
+# Validate expected localhost services
+python3 validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http
+
+# Require AI analysis to succeed too
+python3 validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http --check-ai
 ```
 
 ## Example Output
