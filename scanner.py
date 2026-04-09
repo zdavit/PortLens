@@ -16,6 +16,8 @@ DEFAULT_PORT_RANGE = "1-1024"
 INTERACTIVE_DEFAULT_TARGET = "localhost"
 INTERACTIVE_DEFAULT_PORT_RANGE = "1-100"
 CLOSED_PORT_DISPLAY_LIMIT = 12
+MAX_PORT_NUMBER = 8192
+MAX_PORTS_PER_SCAN = 2048
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2"
 RISK_COLORS = {
@@ -113,6 +115,56 @@ def format_product_name(service):
 
 def collect_open_services(results):
     return [service for host in results for service in host["services"]]
+
+
+def validate_ports_spec(ports_spec):
+    if not ports_spec or not ports_spec.strip():
+        raise ScannerError("Port range cannot be empty.")
+
+    total_ports = 0
+    normalized_chunks = []
+
+    for chunk in ports_spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            raise ScannerError("Port list contains an empty entry.")
+
+        if "-" in chunk:
+            start_text, end_text = chunk.split("-", 1)
+            try:
+                start = int(start_text)
+                end = int(end_text)
+            except ValueError as exc:
+                raise ScannerError(
+                    f"Invalid port range `{chunk}`. Use values like `80`, `443`, or `1-100`."
+                ) from exc
+        else:
+            try:
+                start = end = int(chunk)
+            except ValueError as exc:
+                raise ScannerError(
+                    f"Invalid port `{chunk}`. Use values like `80`, `443`, or `1-100`."
+                ) from exc
+
+        if start > end:
+            start, end = end, start
+
+        if start < 1 or end < 1:
+            raise ScannerError("Ports must be positive integers.")
+        if end > MAX_PORT_NUMBER:
+            raise ScannerError(
+                f"Port ranges are limited to {MAX_PORT_NUMBER} or lower to keep scans responsive."
+            )
+
+        total_ports += end - start + 1
+        if total_ports > MAX_PORTS_PER_SCAN:
+            raise ScannerError(
+                f"Port ranges are limited to {MAX_PORTS_PER_SCAN} ports per scan to avoid long hangs."
+            )
+
+        normalized_chunks.append(f"{start}-{end}" if start != end else str(start))
+
+    return ",".join(normalized_chunks)
 
 
 def lookup_service_name(port, protocol="tcp"):
@@ -261,6 +313,7 @@ def request_ai_response(prompt, announce_message=None):
 
 
 def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True):
+    ports = validate_ports_spec(ports)
     if announce:
         print(f"\n🔍 Scanning {target} (ports {ports})...")
     ensure_nmap_available()
@@ -425,7 +478,8 @@ def main():
         default=None,
         help=(
             f"Port range to scan. Defaults to {DEFAULT_PORT_RANGE} in CLI mode and "
-            f"{INTERACTIVE_DEFAULT_PORT_RANGE} in interactive mode."
+            f"{INTERACTIVE_DEFAULT_PORT_RANGE} in interactive mode. Max port {MAX_PORT_NUMBER}, "
+            f"max {MAX_PORTS_PER_SCAN} ports per scan."
         ),
     )
     parser.add_argument(
