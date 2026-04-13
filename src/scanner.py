@@ -1,10 +1,25 @@
 import argparse
 import json
+import logging
+import os
 import shutil
 import socket
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    filename=os.path.join(LOG_DIR, "scanner.log"),
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("scanner")
 
 try:
     import nmap
@@ -12,12 +27,13 @@ except ImportError:
     nmap = None
 
 
+SCAN_CHUNK_SIZE = 4096
 DEFAULT_PORT_RANGE = "1-1024"
 INTERACTIVE_DEFAULT_TARGET = "localhost"
 INTERACTIVE_DEFAULT_PORT_RANGE = "1-100"
 CLOSED_PORT_DISPLAY_LIMIT = 12
-MAX_PORT_NUMBER = 8192
-MAX_PORTS_PER_SCAN = 2048
+MAX_PORT_NUMBER = 65535
+MAX_PORTS_PER_SCAN = 65535
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2"
 RISK_COLORS = {
@@ -29,24 +45,128 @@ RISK_COLORS = {
 }
 
 RISK_LEVELS = {
-    "ftp": "High",
+    # Remote access
     "ssh": "Medium",
     "telnet": "Critical",
-    "smtp": "Medium",
-    "dns": "Medium",
-    "http": "Low",
-    "pop3": "High",
-    "imap": "High",
-    "https": "Low",
-    "smb": "High",
-    "microsoft-ds": "High",
-    "mysql": "High",
-    "postgresql": "High",
     "rdp": "High",
     "ms-wbt-server": "High",
     "vnc": "High",
+    "x11": "High",
+    # Web
+    "http": "Low",
+    "https": "Low",
     "http-proxy": "Medium",
+    "http-alt": "Low",
+    # File transfer
+    "ftp": "High",
+    "ftp-data": "High",
+    "tftp": "High",
+    "nfs": "High",
+    # Email
+    "smtp": "Medium",
+    "pop3": "High",
+    "imap": "High",
+    "submission": "Medium",
+    # DNS / name resolution
+    "dns": "Medium",
+    "domain": "Medium",
+    "llmnr": "Low",
+    "mdns": "Low",
+    "netbios-ns": "Medium",
+    "netbios-ssn": "Medium",
+    # Databases
+    "mysql": "High",
+    "postgresql": "High",
+    "mongodb": "Critical",
+    "redis": "Critical",
+    "memcached": "Critical",
+    "elasticsearch": "High",
+    "couchdb": "High",
+    "ms-sql-s": "High",
+    "oracle": "High",
+    # File sharing / SMB
+    "smb": "High",
+    "microsoft-ds": "High",
+    # Directory / auth
+    "ldap": "High",
+    "kerberos": "Medium",
+    "kerberos-sec": "Medium",
+    # Printing
+    "ipp": "Low",
+    "printer": "Low",
+    "cups": "Low",
+    # Proxy / tunnel
+    "socks": "High",
+    "pptp": "High",
+    # Container / orchestration
+    "docker": "Critical",
+    # Messaging / IoT
+    "mqtt": "High",
+    "amqp": "Medium",
+    "sip": "Medium",
+    # RPC / system
+    "rpcbind": "Medium",
+    "sunrpc": "Medium",
+    "msrpc": "Medium",
+    "ajp13": "High",
+    "snmp": "High",
+    # Wrapped / unidentified
+    "tcpwrapped": "Medium",
+    "unknown": "Medium",
 }
+
+VERSION_RISK_OVERRIDES = {
+    "ssh": [
+        (lambda v: _version_lt(v, "8.0"), "High", "OpenSSH < 8.0 has known vulnerabilities"),
+    ],
+    "http": [
+        (lambda v: "apache" in v.lower() and _version_lt(v, "2.4"), "High",
+         "Apache < 2.4 is end-of-life"),
+    ],
+    "ftp": [
+        (lambda v: "vsftpd" in v.lower() and _version_lt(v, "3.0"), "Critical",
+         "vsftpd < 3.0 has known backdoor vulnerabilities"),
+    ],
+    "mysql": [
+        (lambda v: _version_lt(v, "8.0"), "Critical",
+         "MySQL < 8.0 lacks modern security defaults"),
+    ],
+    "postgresql": [
+        (lambda v: _version_lt(v, "13"), "Critical",
+         "PostgreSQL < 13 is past end-of-life"),
+    ],
+}
+
+
+def _version_lt(version_string, threshold):
+    import re
+    nums = re.findall(r"\d+", version_string)
+    thresh_nums = re.findall(r"\d+", threshold)
+    if not nums:
+        return False
+    try:
+        return [int(n) for n in nums[:3]] < [int(n) for n in thresh_nums[:3]]
+    except ValueError:
+        return False
+
+
+def classify_risk(service_name, product="", version=""):
+    if not service_name or service_name in ("", "unknown"):
+        return "Medium"
+
+    base_risk = RISK_LEVELS.get(service_name, "Unknown")
+    full_version = f"{product} {version}".strip()
+
+    overrides = VERSION_RISK_OVERRIDES.get(service_name, [])
+    for check_fn, override_risk, reason in overrides:
+        if full_version and check_fn(full_version):
+            logger.debug(
+                "Risk override for %s (%s): %s -> %s (%s)",
+                service_name, full_version, base_risk, override_risk, reason,
+            )
+            return override_risk
+
+    return base_risk
 
 COMMON_EDUCATIONAL_PORTS = [
     21,
@@ -118,6 +238,7 @@ def collect_open_services(results):
 
 
 def validate_ports_spec(ports_spec):
+    logger.debug("Validating port spec: %s", ports_spec)
     if not ports_spec or not ports_spec.strip():
         raise ScannerError("Port range cannot be empty.")
 
@@ -165,6 +286,32 @@ def validate_ports_spec(ports_spec):
         normalized_chunks.append(f"{start}-{end}" if start != end else str(start))
 
     return ",".join(normalized_chunks)
+
+
+def count_ports_in_spec(ports_spec):
+    total = 0
+    for chunk in ports_spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "-" in chunk:
+            start, end = chunk.split("-", 1)
+            total += int(end) - int(start) + 1
+        else:
+            total += 1
+    return total
+
+
+def chunk_port_spec(ports_spec, chunk_size=SCAN_CHUNK_SIZE):
+    all_ports = list(iter_ports_in_ranges(parse_port_ranges(ports_spec)))
+    chunks = []
+    for i in range(0, len(all_ports), chunk_size):
+        batch = all_ports[i : i + chunk_size]
+        if len(batch) == 1:
+            chunks.append(str(batch[0]))
+        else:
+            chunks.append(f"{batch[0]}-{batch[-1]}")
+    return chunks
 
 
 def lookup_service_name(port, protocol="tcp"):
@@ -297,77 +444,112 @@ def request_ai_response(prompt, announce_message=None):
         headers={"Content-Type": "application/json"},
     )
     try:
+        ai_start = time.time()
+        logger.debug("Sending AI request to %s", OLLAMA_API_URL)
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
+        logger.debug("AI response received in %.1f seconds", time.time() - ai_start)
     except urllib.error.URLError as exc:
+        logger.error("AI request failed (URL error): %s", exc)
         raise AIAnalysisError(
             "Could not reach Ollama at http://localhost:11434. Start Ollama or use --no-ai."
         ) from exc
     except json.JSONDecodeError as exc:
+        logger.error("AI response was not valid JSON")
         raise AIAnalysisError("Ollama returned an invalid response.") from exc
 
     response = data.get("response", "").strip()
     if not response:
+        logger.warning("AI returned an empty response")
         raise AIAnalysisError("Ollama returned an empty analysis.")
     return response
 
 
-def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True):
+def _merge_host_info(combined, host_info):
+    if host_info["host"] not in combined:
+        combined[host_info["host"]] = {
+            "host": host_info["host"],
+            "hostname": host_info["hostname"],
+            "state": host_info["state"],
+            "services": [],
+            "ports": [],
+        }
+    entry = combined[host_info["host"]]
+    entry["ports"].extend(host_info["ports"])
+    entry["services"].extend(host_info["services"])
+    if host_info.get("hostname"):
+        entry["hostname"] = host_info["hostname"]
+
+
+def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callback=None):
     ports = validate_ports_spec(ports)
+    total_ports = count_ports_in_spec(ports)
+    logger.info("Starting scan: target=%s ports=%s (%d ports)", target, ports, total_ports)
     if announce:
         print(f"\n🔍 Scanning {target} (ports {ports})...")
     ensure_nmap_available()
 
-    try:
-        nm = nmap.PortScanner()
-        nm.scan(hosts=target, arguments=f"-sV -p {ports}")
-    except (nmap.PortScannerError, OSError) as exc:
-        raise ScannerError(f"nmap failed while scanning {target}: {exc}") from exc
+    chunks = chunk_port_spec(ports)
+    logger.info("Split into %d chunk(s) of up to %d ports each", len(chunks), SCAN_CHUNK_SIZE)
 
-    collapsed_closed_ports = extract_collapsed_closed_ports(nm, set(nm.all_hosts()))
+    combined = {}
+    scanned_ports = 0
+    scan_start = time.time()
 
-    results = []
-    for host in nm.all_hosts():
-        host_info = {
-            "host": host,
-            "hostname": nm[host].hostname(),
-            "state": nm[host].state(),
-            "services": [],
-            "ports": [],
-        }
-        for proto in nm[host].all_protocols():
-            ports_list = sorted(nm[host][proto].keys())
-            for port in ports_list:
-                info = nm[host][proto][port]
-                service_name = info.get("name", "unknown")
-                port_record = {
-                    "port": port,
-                    "state": info.get("state", "unknown"),
-                    "service": service_name,
-                    "product": info.get("product", ""),
-                    "version": info.get("version", ""),
-                    "risk": RISK_LEVELS.get(service_name, "Unknown"),
-                }
-                host_info["ports"].append(port_record)
-                if port_record["state"] == "open":
-                    host_info["services"].append(port_record.copy())
+    for chunk_index, chunk_spec in enumerate(chunks):
+        chunk_count = count_ports_in_spec(chunk_spec)
+        logger.info("Scanning chunk %d/%d: ports %s", chunk_index + 1, len(chunks), chunk_spec)
 
-        collapsed_spec = collapsed_closed_ports.get(host)
-        if collapsed_spec:
-            existing_ports = {port_record["port"] for port_record in host_info["ports"]}
-            for port in synthesize_closed_ports(collapsed_spec, existing_ports):
-                service_name = lookup_service_name(port)
-                host_info["ports"].append(
-                    {
+        try:
+            nm = nmap.PortScanner()
+            nm.scan(hosts=target, arguments=f"-sV --version-intensity 0 -T4 -n -p {chunk_spec}")
+        except (nmap.PortScannerError, OSError) as exc:
+            logger.error("nmap scan failed on chunk %s: %s", chunk_spec, exc, exc_info=True)
+            raise ScannerError(f"nmap failed while scanning {target}: {exc}") from exc
+
+        for host in nm.all_hosts():
+            host_info = {
+                "host": host,
+                "hostname": nm[host].hostname(),
+                "state": nm[host].state(),
+                "services": [],
+                "ports": [],
+            }
+            for proto in nm[host].all_protocols():
+                ports_list = sorted(nm[host][proto].keys())
+                for port in ports_list:
+                    info = nm[host][proto][port]
+                    service_name = info.get("name", "unknown")
+                    product = info.get("product", "")
+                    version = info.get("version", "")
+                    port_record = {
                         "port": port,
-                        "state": "closed",
+                        "state": info.get("state", "unknown"),
                         "service": service_name,
-                        "product": "",
-                        "version": "",
-                        "risk": RISK_LEVELS.get(service_name, "Unknown"),
+                        "product": product,
+                        "version": version,
+                        "risk": classify_risk(service_name, product, version),
                     }
-                )
-        results.append(host_info)
+                    host_info["ports"].append(port_record)
+                    if port_record["state"] == "open":
+                        host_info["services"].append(port_record.copy())
+            _merge_host_info(combined, host_info)
+
+        scanned_ports += chunk_count
+        if progress_callback:
+            progress_callback(scanned_ports, total_ports)
+
+    scan_elapsed = time.time() - scan_start
+    logger.info("nmap scan finished in %.1f seconds", scan_elapsed)
+
+    results = list(combined.values())
+
+    total_open = sum(len(h["services"]) for h in results)
+    total_port_records = sum(len(h["ports"]) for h in results)
+    logger.info(
+        "Scan results: %d host(s), %d open service(s), %d total port records",
+        len(results), total_open, total_port_records,
+    )
     return results
 
 
@@ -413,9 +595,11 @@ def get_ai_analysis(results, announce=True):
     prompt = (
         "You are a cybersecurity expert. Analyze the following network scan results "
         "from a local network scan. For each open service:\n"
-        "1. Briefly explain what the service does\n"
-        "2. Explain why it could be a security risk\n"
-        "3. Suggest how to secure it\n\n"
+        "1. Identify what the port and service is — if the service name is empty, unknown, or "
+        "tcpwrapped, use the port number to explain what commonly runs on that port\n"
+        "2. Briefly explain what the service does\n"
+        "3. Explain why it could be a security risk\n"
+        "4. Suggest how to secure it\n\n"
         "Keep explanations clear and accessible for someone without deep security knowledge.\n\n"
         "Scan results:\n" + "\n".join(services_summary)
     )
@@ -429,10 +613,14 @@ def get_ai_analysis(results, announce=True):
 def get_service_ai_analysis(service, announce=True):
     location = service.get("host", "unknown host")
     hostname = service.get("hostname") or "N/A"
+    service_name = service['service'] or "unidentified"
+    product = service.get('product', '') or "not detected"
     prompt = (
         "You are a cybersecurity expert. Analyze this single open network service and only this service.\n"
         "Return plain text only in exactly this format:\n"
-        "Overview: <one short sentence>\n"
+        "What is this: <explain what this port/service is typically used for, what software commonly runs on it, "
+        "and why it might be open on this machine — even if the service name is vague, empty, or wrapped>\n"
+        "Overview: <one short sentence about the detected service>\n"
         "Risks:\n"
         "- <short risk>\n"
         "- <short risk>\n"
@@ -441,13 +629,15 @@ def get_service_ai_analysis(service, announce=True):
         "2. <short action>\n"
         "3. <short action>\n\n"
         "Rules:\n"
-        "- No markdown formatting, code blocks, bold text, or headings other than Overview, Risks, Actions.\n"
+        "- No markdown formatting, code blocks, bold text, or headings other than What is this, Overview, Risks, Actions.\n"
+        "- If the service name is empty, unknown, or tcpwrapped, use the port number to infer what "
+        "commonly runs there and explain that.\n"
         "- Focus only on the selected port.\n"
         "- Keep every line concise and easy to read in a terminal UI.\n\n"
         f"Host: {location} ({hostname})\n"
         f"Port: {service['port']}\n"
-        f"Service: {service['service']}\n"
-        f"Product: {service['product']}\n"
+        f"Service: {service_name}\n"
+        f"Product: {product}\n"
         f"Risk: {service['risk']}"
     )
 
@@ -493,7 +683,44 @@ def main():
         action="store_true",
         help="Launch the full-screen interactive dashboard",
     )
+    parser.add_argument(
+        "--export",
+        choices=["json", "csv", "both"],
+        default=None,
+        help="Export scan results to JSON, CSV, or both (saved in scan_history/)",
+    )
+    parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Show past scan history and exit",
+    )
+    parser.add_argument(
+        "--diff",
+        metavar="FILE",
+        default=None,
+        help="Compare current scan against a previous scan JSON file",
+    )
     args = parser.parse_args()
+
+    import scan_history
+
+    if args.history:
+        entries = scan_history.list_history()
+        if not entries:
+            print("No scan history found.")
+            return 0
+        print(f"\n{'='*70}")
+        print("  📋 Scan History")
+        print(f"{'='*70}")
+        print(f"  {'Timestamp':<22} {'Target':<20} {'Hosts':<7} {'Open':<6} File")
+        print(f"  {'-'*65}")
+        for e in entries:
+            print(
+                f"  {e['timestamp']:<22} {e['target']:<20} "
+                f"{e['host_count']:<7} {e['open_count']:<6} {e['filename']}"
+            )
+        print()
+        return 0
 
     try:
         if args.interactive:
@@ -514,6 +741,27 @@ def main():
 
         results = scan_network(args.target, args.ports)
         print_results(results)
+
+        json_path = scan_history.export_json(results, args.target, args.ports)
+        print(f"\n💾 Scan saved to {json_path}")
+
+        if args.export in ("csv", "both"):
+            csv_path = scan_history.export_csv(results, args.target, args.ports)
+            print(f"💾 CSV exported to {csv_path}")
+        if args.export in ("json", "both"):
+            print(f"💾 JSON already saved above.")
+
+        if args.diff:
+            try:
+                old_scan = scan_history.load_scan(args.diff)
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"\n⚠️  Could not load previous scan: {exc}")
+            else:
+                diff = scan_history.diff_scans(old_scan["hosts"], results)
+                print(f"\n{'='*60}")
+                print("  🔄 Scan Diff")
+                print(f"{'='*60}")
+                print(scan_history.format_diff(diff))
 
         if not args.no_ai:
             all_services = collect_open_services(results)

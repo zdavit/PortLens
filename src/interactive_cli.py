@@ -1,10 +1,12 @@
 import curses
+import os
 import re
 import textwrap
 import threading
 import time
 from queue import Empty, Queue
 
+import scan_history
 import scanner
 
 
@@ -45,6 +47,7 @@ class DashboardApp:
         self.analysis_errors = {}
         self.analysis_loading_key = None
         self.show_closed = False
+        self.last_save_path = None
 
     def _safe_default_target(self):
         try:
@@ -112,11 +115,15 @@ class DashboardApp:
         self.worker.start()
 
     def _scan_worker(self):
+        def on_progress(scanned, total):
+            self.events.put(("progress", (scanned, total)))
+
         try:
             self.events.put(("status", f"Scanning {self.target} on ports {self.ports}..."))
-            results = scanner.scan_network(self.target, self.ports, announce=False)
+            results = scanner.scan_network(
+                self.target, self.ports, announce=False, progress_callback=on_progress,
+            )
             self.events.put(("results", results))
-
             self.events.put(("done", None))
         except scanner.ScannerError as exc:
             self.events.put(("error", str(exc)))
@@ -160,15 +167,25 @@ class DashboardApp:
                 break
 
             changed = True
-            if event == "status":
+            if event == "progress":
+                scanned, total = payload
+                pct = int(scanned / total * 100) if total else 100
+                self.status_message = f"Scanning... {scanned}/{total} ports ({pct}%)"
+            elif event == "status":
                 self.status_message = payload
             elif event == "results":
                 self.results = payload
                 self.selected_index = 0
                 self.scroll_offset = 0
                 total_services = len(self.flatten_services())
+                try:
+                    path = scan_history.export_json(payload, self.target, self.ports)
+                    self.last_save_path = path
+                    save_msg = " Saved."
+                except OSError:
+                    save_msg = ""
                 self.status_message = (
-                    f"Scan finished: {len(payload)} host(s), {total_services} open service(s)."
+                    f"Scan finished: {len(payload)} host(s), {total_services} open service(s).{save_msg}"
                 )
                 self.ensure_selected_analysis()
             elif event == "service_analysis":
@@ -300,12 +317,14 @@ class DashboardApp:
                 if updated is not None:
                     self.target = updated.strip() or self.target
                     self.status_message = f"Target set to {self.target}."
+            elif key in (ord("f"), ord("F")) and not self.running:
+                self.ports = "1-65535"
+                self.status_message = "Ports set to 1-65535 (full scan). Press r to scan."
             elif key in (ord("p"), ord("P")) and not self.running:
-                updated = self.prompt_input(stdscr, "Ports", self.ports)
-                if updated is not None:
-                    candidate = updated.strip() or self.ports
+                choice = self.prompt_port_menu(stdscr)
+                if choice is not None:
                     try:
-                        self.ports = scanner.validate_ports_spec(candidate)
+                        self.ports = scanner.validate_ports_spec(choice)
                     except scanner.ScannerError as exc:
                         self.status_message = str(exc)
                     else:
@@ -318,10 +337,135 @@ class DashboardApp:
                     self.status_message = "Could not detect a default subnet."
                 else:
                     self.status_message = f"Target reset to {self.target}."
-            elif key in (curses.KEY_UP, ord("k")):
+            elif key in (ord("e"), ord("E")) and not self.running and self.results:
+                try:
+                    csv_path = scan_history.export_csv(self.results, self.target, self.ports)
+                    self.status_message = f"CSV exported: {os.path.basename(csv_path)}"
+                except OSError as exc:
+                    self.status_message = f"Export failed: {exc}"
+            elif key in (ord("h"), ord("H")) and not self.running:
+                self.show_history_menu(stdscr)
+            elif key == curses.KEY_UP:
                 self.move_selection(-1)
-            elif key in (curses.KEY_DOWN, ord("j")):
+            elif key == curses.KEY_DOWN:
                 self.move_selection(1)
+
+    def prompt_port_menu(self, stdscr):
+        PORT_PRESETS = [
+            ("1-100", "Quick scan (ports 1-100)"),
+            ("1-1024", "Well-known ports (1-1024)"),
+            ("1-10000", "Extended range (1-10000)"),
+            ("1-65535", "Full scan (all ports)"),
+            ("21,22,23,25,53,80,110,143,443,3306,3389,5432,8080", "Common services only"),
+        ]
+        height, width = stdscr.getmaxyx()
+        menu_items = len(PORT_PRESETS) + 1  # +1 for custom
+        box_height = menu_items + 6
+        box_width = min(60, max(40, width - 4))
+        start_y = max(1, (height - box_height) // 2)
+        start_x = max(2, (width - box_width) // 2)
+        window = curses.newwin(box_height, box_width, start_y, start_x)
+        window.keypad(True)
+
+        selected = 0
+        total = len(PORT_PRESETS) + 1
+
+        while True:
+            window.erase()
+            if self.has_colors:
+                window.attron(self.color(COLOR_PANEL))
+                window.border()
+                window.attroff(self.color(COLOR_PANEL))
+            else:
+                window.border()
+            window.addnstr(0, 2, " Port Range ", box_width - 4, self.color(COLOR_ACCENT) | curses.A_BOLD)
+            window.addnstr(2, 2, "Select a range or enter a custom one:", box_width - 4, self.color(COLOR_MUTED))
+
+            for i, (value, label) in enumerate(PORT_PRESETS):
+                attr = self.color(COLOR_SELECTION, curses.A_REVERSE) | curses.A_BOLD if i == selected else curses.A_NORMAL
+                window.addnstr(4 + i, 3, f" {label} ", box_width - 6, attr)
+
+            custom_attr = self.color(COLOR_SELECTION, curses.A_REVERSE) | curses.A_BOLD if selected == total - 1 else curses.A_NORMAL
+            window.addnstr(4 + len(PORT_PRESETS), 3, " Custom range... ", box_width - 6, custom_attr)
+            window.refresh()
+
+            key = window.getch()
+            if key in (ord("q"), ord("Q"), 27):  # q or Escape
+                return None
+            elif key in (curses.KEY_UP, ord("k")):
+                selected = (selected - 1) % total
+            elif key in (curses.KEY_DOWN, ord("j")):
+                selected = (selected + 1) % total
+            elif key in (10, curses.KEY_ENTER):  # Enter
+                if selected < len(PORT_PRESETS):
+                    return PORT_PRESETS[selected][0]
+                else:
+                    del window
+                    return self.prompt_input(stdscr, "Custom Ports", self.ports)
+
+    def show_history_menu(self, stdscr):
+        entries = scan_history.list_history()
+        if not entries:
+            self.status_message = "No scan history found."
+            return
+
+        display_entries = entries[:20]
+        height, width = stdscr.getmaxyx()
+        box_height = min(len(display_entries) + 5, height - 4)
+        box_width = min(75, max(50, width - 4))
+        start_y = max(1, (height - box_height) // 2)
+        start_x = max(2, (width - box_width) // 2)
+        window = curses.newwin(box_height, box_width, start_y, start_x)
+        window.keypad(True)
+
+        selected = 0
+        view_height = box_height - 5
+
+        while True:
+            window.erase()
+            if self.has_colors:
+                window.attron(self.color(COLOR_PANEL))
+                window.border()
+                window.attroff(self.color(COLOR_PANEL))
+            else:
+                window.border()
+            window.addnstr(0, 2, " Scan History ", box_width - 4,
+                           self.color(COLOR_ACCENT) | curses.A_BOLD)
+            window.addnstr(2, 2, "Select a scan to diff against current results:",
+                           box_width - 4, self.color(COLOR_MUTED))
+
+            visible = display_entries[:view_height]
+            for i, entry in enumerate(visible):
+                label = (
+                    f"{entry['timestamp']}  {entry['target']:<16} "
+                    f"{entry['open_count']} open"
+                )
+                attr = (self.color(COLOR_SELECTION, curses.A_REVERSE) | curses.A_BOLD
+                        if i == selected else curses.A_NORMAL)
+                window.addnstr(4 + i, 3, f" {label} ", box_width - 6, attr)
+            window.refresh()
+
+            key = window.getch()
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            elif key in (curses.KEY_UP, ord("k")):
+                selected = (selected - 1) % len(visible)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                selected = (selected + 1) % len(visible)
+            elif key in (10, curses.KEY_ENTER):
+                chosen = visible[selected]
+                del window
+                if not self.results:
+                    self.status_message = "Run a scan first before diffing."
+                    return
+                try:
+                    old_scan = scan_history.load_scan(chosen["filepath"])
+                    diff = scan_history.diff_scans(old_scan["hosts"], self.results)
+                    self.status_message = scan_history.format_diff(diff).split("\n")[0]
+                    self._last_diff = scan_history.format_diff(diff)
+                except (OSError, KeyError) as exc:
+                    self.status_message = f"Diff failed: {exc}"
+                return
 
     def prompt_input(self, stdscr, label, current_value):
         height, width = stdscr.getmaxyx()
@@ -397,7 +541,7 @@ class DashboardApp:
             f"Ports: {self.ports}",
             f"View: {'OPEN + CLOSED' if self.show_closed else 'OPEN ONLY'}",
             f"AI Analysis: {'ON' if self.use_ai else 'OFF'}",
-            "Keys: r scan  t edit target  p edit ports  o toggle closed  a toggle ai  d subnet target  j/k move  q quit",
+            "Keys: r scan | t target | p ports | f full | e export | h history | o closed | a ai | d subnet | q",
             f"Status: {self.status_message}",
         ]
         for index, line in enumerate(controls, start=1):

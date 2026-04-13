@@ -41,26 +41,26 @@ pip install -r requirements.txt
 
 ```bash
 # Launch the full-screen interactive dashboard
-python3 scanner.py --interactive
+python src/scanner.py --interactive
 
 # Scan localhost (default port range 1-1024)
-python3 scanner.py localhost
+python src/scanner.py localhost
 
 # Scan a specific port range
-python3 scanner.py localhost -p 1-100
+python src/scanner.py localhost -p 1-100
 
 # Scan your local subnet (auto-detected)
-python3 scanner.py
+python src/scanner.py
 
 # Scan without AI analysis
-python3 scanner.py localhost --no-ai
+python src/scanner.py localhost --no-ai
 ```
 
 If Ollama is not running, the scan still completes and reports a clear warning for the AI step instead of crashing.
 
 ## Interactive Dashboard
 
-Launch the dashboard with `python3 scanner.py --interactive` to get a full-screen terminal UI similar to a lightweight `btop` workflow.
+Launch the dashboard with `python3 src/scanner.py --interactive` to get a full-screen terminal UI similar to a lightweight `btop` workflow.
 
 Interactive mode now starts with a quick `localhost` scan over ports `1-100` so the screen feels responsive immediately. Press `d` any time to switch back to the auto-detected local subnet for a broader scan.
 
@@ -81,13 +81,13 @@ Use the validation script to confirm the localhost scan path still works and tha
 
 ```bash
 # Validate the scan structure only
-python3 validate_localhost.py -p 1-100
+python3 src/validate_localhost.py -p 1-100
 
 # Validate expected localhost services
-python3 validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http
+python3 src/validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http
 
 # Require AI analysis to succeed too
-python3 validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http --check-ai
+python3 src/validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http --check-ai
 ```
 
 ## Example Output
