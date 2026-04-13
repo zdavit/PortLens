@@ -94,6 +94,8 @@ Improving these metrics corresponds directly to a more reliable and useful syste
 - Prioritize correctness and clarity over complexity
 - Avoid overengineering the frontend; focus on backend and analysis
 - Use AI to enhance understanding, not replace core logic
+- Always update the readme if anything substantial changes
+- Check off the todo box if what we have done from the list is complete
 
 ---
 
