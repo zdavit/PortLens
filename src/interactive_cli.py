@@ -756,6 +756,13 @@ class DashboardApp:
         else:
             lines.append("Run a scan to inspect open services and security guidance.")
 
+        SECTION_LABELS = {
+            "Overview:": self.color(COLOR_ACCENT) | curses.A_BOLD,
+            "What is this:": self.color(COLOR_PANEL) | curses.A_BOLD,
+            "Risks:": self.color(COLOR_DANGER) | curses.A_BOLD,
+            "Actions:": self.color(COLOR_SUCCESS) | curses.A_BOLD,
+        }
+
         for row, line in enumerate(lines[:content_height]):
             attr = curses.A_NORMAL
             if row == 0:
@@ -776,7 +783,22 @@ class DashboardApp:
                 attr = self.color(COLOR_MUTED)
             elif selected_key and selected_key in self.analysis_cache:
                 attr = self.color(COLOR_MUTED)
-            stdscr.addnstr(content_y + row, content_x, line, content_width - 1, attr)
+
+            label_attr = None
+            for label, lattr in SECTION_LABELS.items():
+                if line.startswith(label):
+                    label_attr = (label, lattr)
+                    break
+
+            if label_attr:
+                label, lattr = label_attr
+                stdscr.addnstr(content_y + row, content_x, label, content_width - 1, lattr)
+                rest = line[len(label):]
+                if rest:
+                    rest_attr = self.color(COLOR_MUTED) if selected_key and selected_key in self.analysis_cache else curses.A_NORMAL
+                    stdscr.addnstr(content_y + row, content_x + len(label), rest, content_width - 1 - len(label), rest_attr)
+            else:
+                stdscr.addnstr(content_y + row, content_x, line, content_width - 1, attr)
 
 
 def launch_dashboard(initial_target=None, initial_ports=None, initial_use_ai=True):
