@@ -47,7 +47,7 @@ def export_csv(results, target, ports, filepath=None):
     if filepath is None:
         filepath = os.path.join(HISTORY_DIR, _scan_filename(target, ts, "csv"))
 
-    fieldnames = ["timestamp", "target", "host", "hostname", "port", "state",
+    fieldnames = ["timestamp", "target", "host", "hostname", "port", "protocol", "state",
                   "service", "product", "version", "risk"]
 
     with open(filepath, "w", newline="") as f:
@@ -61,6 +61,7 @@ def export_csv(results, target, ports, filepath=None):
                     "host": host_info["host"],
                     "hostname": host_info.get("hostname", ""),
                     "port": port_rec["port"],
+                    "protocol": port_rec.get("protocol", "tcp"),
                     "state": port_rec.get("state", "open"),
                     "service": port_rec["service"],
                     "product": port_rec.get("product", ""),

@@ -9,12 +9,15 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from datetime import datetime
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
+_log_filename = datetime.now().strftime("scan_%Y-%m-%d_%H-%M-%S.log")
 logging.basicConfig(
-    filename=os.path.join(LOG_DIR, "scanner.log"),
+    filename=os.path.join(LOG_DIR, _log_filename),
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
@@ -113,6 +116,21 @@ RISK_LEVELS = {
     # Wrapped / unidentified
     "tcpwrapped": "Medium",
     "unknown": "Medium",
+    # UDP-specific services
+    "dhcps": "Medium",
+    "dhcpc": "Medium",
+    "tftp": "High",
+    "ntp": "Low",
+    "snmp": "High",
+    "syslog": "Medium",
+    "openvpn": "Medium",
+    "isakmp": "Medium",
+    "l2tp": "Medium",
+    "radius": "Medium",
+    "upnp": "High",
+    "ssdp": "High",
+    "nbdgram": "Medium",
+    "nbns": "Medium",
 }
 
 VERSION_RISK_OVERRIDES = {
@@ -465,6 +483,26 @@ def request_ai_response(prompt, announce_message=None):
     return response
 
 
+SCAN_MODES = ("tcp", "udp", "both")
+
+
+def _check_root_for_scan(scan_mode):
+    if scan_mode in ("udp", "both") and os.geteuid() != 0:
+        raise ScannerError(
+            f"{scan_mode.upper()} scanning requires root privileges. "
+            f"Run with sudo or switch to TCP mode."
+        )
+
+
+def _nmap_scan_args(scan_mode, chunk_spec):
+    if scan_mode == "udp":
+        return f"-sU --version-intensity 0 -T4 -n -p {chunk_spec}"
+    elif scan_mode == "both":
+        return f"-sS -sU -sV --version-intensity 0 -T4 -n -p {chunk_spec}"
+    else:
+        return f"-sV --version-intensity 0 -T4 -n -p {chunk_spec}"
+
+
 def _merge_host_info(combined, host_info):
     if host_info["host"] not in combined:
         combined[host_info["host"]] = {
@@ -481,12 +519,14 @@ def _merge_host_info(combined, host_info):
         entry["hostname"] = host_info["hostname"]
 
 
-def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callback=None):
+def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callback=None, scan_mode="tcp"):
+    _check_root_for_scan(scan_mode)
     ports = validate_ports_spec(ports)
     total_ports = count_ports_in_spec(ports)
-    logger.info("Starting scan: target=%s ports=%s (%d ports)", target, ports, total_ports)
+    logger.info("Starting scan: target=%s ports=%s (%d ports) mode=%s", target, ports, total_ports, scan_mode)
     if announce:
-        print(f"\n🔍 Scanning {target} (ports {ports})...")
+        mode_label = scan_mode.upper()
+        print(f"\n🔍 Scanning {target} (ports {ports}, {mode_label})...")
     ensure_nmap_available()
 
     chunks = chunk_port_spec(ports)
@@ -502,7 +542,7 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
 
         try:
             nm = nmap.PortScanner()
-            nm.scan(hosts=target, arguments=f"-sV --version-intensity 0 -T4 -n -p {chunk_spec}")
+            nm.scan(hosts=target, arguments=_nmap_scan_args(scan_mode, chunk_spec))
         except (nmap.PortScannerError, OSError) as exc:
             logger.error("nmap scan failed on chunk %s: %s", chunk_spec, exc, exc_info=True)
             raise ScannerError(f"nmap failed while scanning {target}: {exc}") from exc
@@ -524,6 +564,7 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
                     version = info.get("version", "")
                     port_record = {
                         "port": port,
+                        "protocol": proto,
                         "state": info.get("state", "unknown"),
                         "service": service_name,
                         "product": product,
@@ -568,14 +609,16 @@ def print_results(results):
             print("  No open ports detected.")
             continue
 
-        print(f"  {'Port':<8} {'Service':<15} {'Product':<20} {'Risk':<10}")
-        print(f"  {'-'*53}")
+        print(f"  {'Port':<10} {'Service':<15} {'Product':<20} {'Risk':<10}")
+        print(f"  {'-'*55}")
         for svc in host_info["services"]:
             product = format_product_name(svc)
             color = RISK_COLORS.get(svc["risk"], "")
             reset = "\033[0m"
+            proto = svc.get("protocol", "tcp")
+            port_label = f"{svc['port']}/{proto}"
             print(
-                f"  {svc['port']:<8} {svc['service']:<15} {product:<20} "
+                f"  {port_label:<10} {svc['service']:<15} {product:<20} "
                 f"{color}{svc['risk']}{reset}"
             )
 
@@ -701,6 +744,16 @@ def main():
         default=None,
         help="Compare current scan against a previous scan JSON file",
     )
+    parser.add_argument(
+        "--udp",
+        action="store_true",
+        help="Scan UDP ports instead of TCP (requires root/sudo)",
+    )
+    parser.add_argument(
+        "--both",
+        action="store_true",
+        help="Scan both TCP and UDP ports (requires root/sudo)",
+    )
     args = parser.parse_args()
 
     import scan_history
@@ -723,6 +776,8 @@ def main():
         print()
         return 0
 
+    scan_mode = "both" if args.both else ("udp" if args.udp else "tcp")
+
     try:
         if args.interactive:
             from interactive_cli import launch_dashboard
@@ -731,6 +786,7 @@ def main():
                 initial_target=args.target or INTERACTIVE_DEFAULT_TARGET,
                 initial_ports=args.ports or INTERACTIVE_DEFAULT_PORT_RANGE,
                 initial_use_ai=not args.no_ai,
+                initial_scan_mode=scan_mode,
             )
 
         if args.target is None:
@@ -740,7 +796,7 @@ def main():
         if args.ports is None:
             args.ports = DEFAULT_PORT_RANGE
 
-        results = scan_network(args.target, args.ports)
+        results = scan_network(args.target, args.ports, scan_mode=scan_mode)
         print_results(results)
 
         json_path = scan_history.export_json(results, args.target, args.ports)

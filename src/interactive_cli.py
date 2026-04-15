@@ -25,10 +25,11 @@ INLINE_CODE_RE = re.compile(r"`([^`]*)`")
 
 
 class DashboardApp:
-    def __init__(self, initial_target=None, initial_ports=None, initial_use_ai=True):
+    def __init__(self, initial_target=None, initial_ports=None, initial_use_ai=True, initial_scan_mode="tcp"):
         self.target = initial_target or self._safe_default_target()
         self.ports = initial_ports or scanner.DEFAULT_PORT_RANGE
         self.use_ai = initial_use_ai
+        self.scan_mode = initial_scan_mode
         self.status_message = (
             "Interactive mode starts with a quick localhost scan. Press d for your subnet."
         )
@@ -65,6 +66,7 @@ class DashboardApp:
                     "host": host_info["host"],
                     "hostname": hostname,
                     "port": service["port"],
+                    "protocol": service.get("protocol", "tcp"),
                     "service": service["service"],
                     "product": scanner.format_product_name(service),
                     "risk": service.get("risk", "Unknown"),
@@ -119,9 +121,11 @@ class DashboardApp:
             self.events.put(("progress", (scanned, total)))
 
         try:
-            self.events.put(("status", f"Scanning {self.target} on ports {self.ports}..."))
+            mode_label = self.scan_mode.upper()
+            self.events.put(("status", f"Scanning {self.target} on ports {self.ports} ({mode_label})..."))
             results = scanner.scan_network(
                 self.target, self.ports, announce=False, progress_callback=on_progress,
+                scan_mode=self.scan_mode,
             )
             self.events.put(("results", results))
             self.events.put(("done", None))
@@ -343,6 +347,15 @@ class DashboardApp:
                     self.status_message = f"CSV exported: {os.path.basename(csv_path)}"
                 except OSError as exc:
                     self.status_message = f"Export failed: {exc}"
+            elif key in (ord("u"), ord("U")) and not self.running:
+                modes = list(scanner.SCAN_MODES)
+                current = modes.index(self.scan_mode) if self.scan_mode in modes else 0
+                next_mode = modes[(current + 1) % len(modes)]
+                if next_mode in ("udp", "both") and os.geteuid() != 0:
+                    self.status_message = f"{next_mode.upper()} scanning requires root. Run with sudo."
+                else:
+                    self.scan_mode = next_mode
+                    self.status_message = f"Scan mode set to {self.scan_mode.upper()}. Press r to scan."
             elif key in (ord("h"), ord("H")) and not self.running:
                 self.show_history_menu(stdscr)
             elif key == curses.KEY_UP:
@@ -538,10 +551,10 @@ class DashboardApp:
         self.draw_box(stdscr, 1, 0, top_height, width, "Controls")
         controls = [
             f"Target: {self.target}",
-            f"Ports: {self.ports}",
+            f"Ports: {self.ports}  |  Mode: {self.scan_mode.upper()}",
             f"View: {'OPEN + CLOSED' if self.show_closed else 'OPEN ONLY'}",
             f"AI Analysis: {'ON' if self.use_ai else 'OFF'}",
-            "Keys: r scan | t target | p ports | f full | e export | h history | o closed | a ai | d subnet | q",
+            "Keys: r scan | t target | p ports | f full | u tcp/udp | e export | h history | o closed | a ai | q",
             f"Status: {self.status_message}",
         ]
         for index, line in enumerate(controls, start=1):
@@ -616,7 +629,7 @@ class DashboardApp:
         elif self.selected_index >= self.scroll_offset + max_visible:
             self.scroll_offset = self.selected_index - max_visible + 1
 
-        header = "Port  Service       State    Host"
+        header = "Port       Service       State    Host"
         stdscr.addnstr(
             start_y + 1,
             start_x + 2,
@@ -628,11 +641,12 @@ class DashboardApp:
         for row, service in enumerate(visible_services, start=0):
             actual_index = self.scroll_offset + row
             selected = actual_index == self.selected_index
+            port_label = f"{service['port']}/{service['protocol']}"
             line = (
-                f"{service['port']:<5} "
+                f"{port_label:<10} "
                 f"{service['service'][:12]:<12} "
                 f"{service['state'][:8]:<8} "
-                f"{service['host'][:inner_width - 32]}"
+                f"{service['host'][:inner_width - 37]}"
             )
             attrs = self.row_attr(service, selected=selected)
             stdscr.addnstr(start_y + 2 + row, start_x + 2, line, inner_width - 2, attrs)
@@ -801,6 +815,6 @@ class DashboardApp:
                 stdscr.addnstr(content_y + row, content_x, line, content_width - 1, attr)
 
 
-def launch_dashboard(initial_target=None, initial_ports=None, initial_use_ai=True):
-    app = DashboardApp(initial_target, initial_ports, initial_use_ai)
+def launch_dashboard(initial_target=None, initial_ports=None, initial_use_ai=True, initial_scan_mode="tcp"):
+    app = DashboardApp(initial_target, initial_ports, initial_use_ai, initial_scan_mode)
     return curses.wrapper(app.run)

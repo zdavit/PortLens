@@ -6,7 +6,7 @@
 - [ ] **Security score summary** — compute an overall risk score per host (e.g., "Host 192.168.1.5: 72/100") based on number and severity of open services
 - [ ] **Scan scheduling / watch mode** — re-scan on a configurable interval and alert when something changes (new port opens, service disappears)
 - [ ] **HTML/PDF report export** — generate a shareable security report from scan results + AI analysis
-- [ ] **UDP scanning** — currently TCP-only; UDP would catch DNS (53), SNMP (161), DHCP (67/68)
+- [x] **UDP scanning** — TCP, UDP, and combined scanning with `--udp`, `--both` flags and `u` key toggle
 - [ ] **Firewall rule suggestions** — based on open ports, generate `iptables`/`firewalld` rules to close unnecessary ones
 - [ ] **Web interface** — Flask/FastAPI frontend with a browser-based dashboard instead of just the curses CLI
 
