@@ -16,7 +16,10 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 
 ## Features
 
-- **Network device mapping** — scan a subnet and view a table of all discovered hosts with hostname, OS guess (`nmap -O`), and open port count (press `m` in the dashboard)
+- **Network device mapping** — scan a subnet and view a table of all discovered hosts with hostname, OS guess (`nmap -O`), and open port count (press `m` in the dashboard); select a host to set it as the scan target
+- **Two-phase scanning** — automatic ping sweep discovers live hosts first, then only port-scans those hosts (dramatically faster on subnets)
+- **Security score summary** — per-host 0-100 security score based on the number and severity of open services, shown in the detail pane
+- **Target input validation** — rejects shell characters, nmap option injection, and overly broad subnets before scanning
 - **Full port scanning** — scan any range up to all 65535 ports with chunked, parallelized nmap (`-T4`, `-sV`)
 - **70+ service risk classifications** — covers remote access, web, databases, file sharing, printing, DNS, RPC, containers, and more
 - **Version-aware risk overrides** — outdated software (e.g., OpenSSH < 8.0, MySQL < 8.0, PostgreSQL < 13) is automatically escalated to a higher risk level
@@ -80,20 +83,22 @@ Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover 
 
 | Key | Action |
 |-----|--------|
+| `?` | Show help with all keybindings |
 | `r` | Run a scan |
 | `t` | Edit target host or subnet |
 | `p` | Open port range menu (presets + custom) |
 | `f` | Set ports to 1-65535 (full scan) |
+| `d` | Reset target to auto-detected local subnet |
+| `u` | Cycle scan mode (TCP / UDP / Both) |
 | `m` | Network map — discover hosts with OS detection (requires root) |
 | `e` | Export current results to CSV |
 | `h` | Browse scan history and diff against current results |
 | `o` | Toggle open-only / open+closed port view |
 | `a` | Toggle AI analysis on/off |
-| `d` | Reset target to auto-detected local subnet |
 | `↑/↓` | Navigate through detected services |
 | `q` | Quit the dashboard |
 
-The dashboard keeps scans running in the background, shows live progress (`2048/65535 ports (3%)`), lists open services in a color-coded table, and displays per-service details with an AI-generated explanation for the currently selected port.
+The dashboard keeps scans running in the background, shows live progress, lists open services in a color-coded table, and displays per-service details with a security score and AI-generated explanation for the currently selected port.
 
 ## Risk Classification
 
