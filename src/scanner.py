@@ -255,6 +255,18 @@ def ensure_nmap_available():
 
 
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+MAX_BANNER_LEN = 200
+
+
+def sanitize_banner(text):
+    """Strip control characters, ANSI escapes, and truncate to MAX_BANNER_LEN."""
+    if not text:
+        return text
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = _CONTROL_CHAR_RE.sub("", text)
+    return text[:MAX_BANNER_LEN]
 
 
 def validate_target(target):
@@ -657,9 +669,9 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
                     ports_list = sorted(nm[host][proto].keys())
                     for port in ports_list:
                         info = nm[host][proto][port]
-                        service_name = info.get("name", "unknown")
-                        product = info.get("product", "")
-                        version = info.get("version", "")
+                        service_name = sanitize_banner(info.get("name", "unknown"))
+                        product = sanitize_banner(info.get("product", ""))
+                        version = sanitize_banner(info.get("version", ""))
                         port_record = {
                             "port": port,
                             "protocol": proto,

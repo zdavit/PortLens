@@ -1,18 +1,28 @@
 import csv
+import html
 import json
 import logging
 import os
+import stat
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HISTORY_DIR = os.path.join(BASE_DIR, "scan_history")
-os.makedirs(HISTORY_DIR, exist_ok=True)
+os.makedirs(HISTORY_DIR, mode=0o700, exist_ok=True)
 
 logger = logging.getLogger("scanner")
 
 
 def _timestamp():
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _secure_file(filepath):
+    """Set file permissions to owner-only read/write (0600)."""
+    try:
+        os.chmod(filepath, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
 
 
 def _scan_filename(target, timestamp, ext):
@@ -37,6 +47,7 @@ def export_json(results, target, ports, filepath=None):
     }
     with open(filepath, "w") as f:
         json.dump(record, f, indent=2)
+    _secure_file(filepath)
 
     logger.info("Exported JSON scan to %s", filepath)
     return filepath
@@ -69,6 +80,7 @@ def export_csv(results, target, ports, filepath=None):
                     "risk": port_rec.get("risk", "Unknown"),
                 })
 
+    _secure_file(filepath)
     logger.info("Exported CSV scan to %s", filepath)
     return filepath
 
@@ -189,3 +201,115 @@ def format_diff(diff):
     if not diff["opened"] and not diff["closed"] and not diff["risk_changes"]:
         lines.append("No changes detected since the last scan.")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# HTML report export
+# ---------------------------------------------------------------------------
+
+_RISK_COLORS = {
+    "Critical": "#e74c3c",
+    "High": "#e67e22",
+    "Medium": "#f39c12",
+    "Low": "#27ae60",
+    "Unknown": "#95a5a6",
+}
+
+
+def export_html(results, target, ports, ai_cache=None, filepath=None):
+    """Generate a self-contained HTML security report."""
+    ts = _timestamp()
+    if filepath is None:
+        filepath = os.path.join(HISTORY_DIR, _scan_filename(target, ts, "html"))
+
+    if ai_cache is None:
+        ai_cache = {}
+
+    e = html.escape
+
+    host_sections = []
+    for host_info in results:
+        host = host_info["host"]
+        hostname = host_info.get("hostname") or "N/A"
+        services = host_info.get("services", [])
+
+        # Compute score inline
+        penalty = 0
+        risk_penalties = {"Critical": 25, "High": 15, "Medium": 8, "Low": 3, "Unknown": 5}
+        for svc in services:
+            penalty += risk_penalties.get(svc.get("risk", "Unknown"), 5)
+        score = max(0, 100 - penalty)
+
+        rows = []
+        for svc in host_info.get("ports", services):
+            risk = svc.get("risk", "Unknown")
+            color = _RISK_COLORS.get(risk, "#95a5a6")
+            product = svc.get("product", "")
+            if svc.get("version"):
+                product += f" {svc['version']}"
+            product = product.strip() or "N/A"
+            rows.append(
+                f'<tr>'
+                f'<td>{svc["port"]}/{e(svc.get("protocol", "tcp"))}</td>'
+                f'<td>{e(svc.get("state", "open"))}</td>'
+                f'<td>{e(svc.get("service", "unknown"))}</td>'
+                f'<td>{e(product)}</td>'
+                f'<td style="color:{color};font-weight:bold">{e(risk)}</td>'
+                f'</tr>'
+            )
+
+        ai_sections = []
+        for svc in services:
+            key = (host, svc["port"], svc["service"], svc.get("state", "open"))
+            analysis = ai_cache.get(key)
+            if analysis:
+                ai_sections.append(
+                    f'<div class="ai-box">'
+                    f'<h4>Port {svc["port"]} — {e(svc["service"])}</h4>'
+                    f'<pre>{e(analysis)}</pre>'
+                    f'</div>'
+                )
+
+        ai_html = "\n".join(ai_sections) if ai_sections else '<p class="muted">No AI analysis available.</p>'
+
+        host_sections.append(
+            f'<div class="host">'
+            f'<h2>{e(host)} ({e(hostname)})</h2>'
+            f'<p>Security Score: <strong>{score}/100</strong> | '
+            f'Open services: {len(services)}</p>'
+            f'<table><thead><tr>'
+            f'<th>Port</th><th>State</th><th>Service</th><th>Product</th><th>Risk</th>'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
+            f'<h3>AI Analysis</h3>{ai_html}'
+            f'</div>'
+        )
+
+    body = "\n".join(host_sections) if host_sections else '<p>No hosts found.</p>'
+
+    report = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Security Report — {e(target)} — {e(ts)}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+       max-width: 960px; margin: 2em auto; padding: 0 1em; background: #1a1a2e; color: #e0e0e0; }}
+h1 {{ color: #00d9ff; }} h2 {{ color: #00d9ff; border-bottom: 1px solid #333; padding-bottom: .3em; }}
+h3 {{ color: #bb86fc; }} h4 {{ color: #03dac6; margin: .5em 0; }}
+table {{ width: 100%; border-collapse: collapse; margin: 1em 0; }}
+th, td {{ padding: .5em .8em; text-align: left; border-bottom: 1px solid #333; }}
+th {{ background: #16213e; color: #00d9ff; }}
+tr:hover {{ background: #16213e; }}
+.host {{ margin: 2em 0; }}
+.ai-box {{ background: #16213e; padding: 1em; border-radius: 6px; margin: .8em 0; }}
+.ai-box pre {{ white-space: pre-wrap; margin: 0; }}
+.muted {{ color: #666; }}
+</style></head><body>
+<h1>🛡️ Security Report</h1>
+<p>Target: <strong>{e(target)}</strong> | Ports: {e(ports)} | Generated: {e(ts)}</p>
+{body}
+</body></html>"""
+
+    with open(filepath, "w") as f:
+        f.write(report)
+    _secure_file(filepath)
+    logger.info("Exported HTML report to %s", filepath)
+    return filepath

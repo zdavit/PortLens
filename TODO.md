@@ -1,17 +1,5 @@
 # TODO
 
-## High Priority
-
-- [x] **Target input validation** — reject targets with shell characters, require valid IP/CIDR/hostname, block strings starting with `-` to prevent nmap option injection
-
-## Medium Priority
-
-- [x] **Restrict `--diff` file reads** — only allow loading files from `scan_history/`, canonicalize paths to prevent arbitrary file reads (especially dangerous when running as root)
-- [ ] **Scan data file permissions** — set `0700` on directories and `0600` on saved JSON/CSV files so scan results aren't world-readable
-- [ ] **Sanitize service banners** — strip control characters and ANSI escapes from nmap output before displaying in terminal or sending to AI to prevent terminal escape injection
-- [ ] **Scan scheduling / watch mode** — re-scan on a configurable interval and alert when something changes (new port opens, service disappears)
-- [ ] **HTML/PDF report export** — generate a shareable security report from scan results + AI analysis
-
 ## Low Priority
 
 - [ ] **Pin dependencies** — lock `python-nmap` to an exact version in `requirements.txt` and run `pip-audit` to catch known vulnerabilities
@@ -35,3 +23,9 @@
 - [x] UDP scanning — TCP, UDP, and combined scanning with `--udp`, `--both` flags and `u` key toggle
 - [x] Network device mapping — scan a subnet and display a table of all discovered hosts with hostname, OS guess, and open port count
 - [x] Security score summary — compute an overall risk score per host based on number and severity of open services
+- [x] Target input validation — reject targets with shell characters, require valid IP/CIDR/hostname, block strings starting with `-`
+- [x] Restrict `--diff` file reads — only allow loading files from `scan_history/`
+- [x] Scan data file permissions — `0700` directories, `0600` files for saved scan data
+- [x] Sanitize service banners — strip control characters and ANSI escapes from nmap output
+- [x] Scan scheduling / watch mode — auto-rescan on interval, alert when ports open/close or risks change
+- [x] HTML report export — self-contained HTML security report with scores, port tables, and AI analysis

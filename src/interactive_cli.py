@@ -50,6 +50,10 @@ class DashboardApp:
         self.network_map = []
         self.network_map_loading = False
         self.network_map_worker = None
+        self.watch_mode = False
+        self.watch_interval = 60
+        self.watch_timer = None
+        self.watch_previous_results = None
 
     def _safe_default_target(self):
         try:
@@ -203,6 +207,25 @@ class DashboardApp:
             elif event == "status":
                 self.status_message = payload
             elif event == "results":
+                # Diff against previous results if watch mode is active
+                watch_alert = ""
+                if self.watch_mode and self.watch_previous_results is not None:
+                    diff = scan_history.diff_scans(self.watch_previous_results, payload)
+                    changes = len(diff["opened"]) + len(diff["closed"]) + len(diff["risk_changes"])
+                    if changes:
+                        parts = []
+                        if diff["opened"]:
+                            parts.append(f"+{len(diff['opened'])} new")
+                        if diff["closed"]:
+                            parts.append(f"-{len(diff['closed'])} closed")
+                        if diff["risk_changes"]:
+                            parts.append(f"~{len(diff['risk_changes'])} risk changed")
+                        watch_alert = f" ⚠ CHANGES: {', '.join(parts)}"
+                    else:
+                        watch_alert = " No changes."
+                if self.watch_mode:
+                    self.watch_previous_results = payload
+
                 self.results = payload
                 self.selected_index = 0
                 self.scroll_offset = 0
@@ -214,7 +237,7 @@ class DashboardApp:
                 except OSError:
                     save_msg = ""
                 self.status_message = (
-                    f"Scan finished: {len(payload)} host(s), {total_services} open service(s).{save_msg}"
+                    f"Scan finished: {len(payload)} host(s), {total_services} open service(s).{save_msg}{watch_alert}"
                 )
                 self.ensure_selected_analysis()
             elif event == "service_analysis":
@@ -240,6 +263,8 @@ class DashboardApp:
             elif event == "done":
                 self.running = False
                 self.ensure_selected_analysis()
+                if self.watch_mode:
+                    self.watch_timer = time.time() + self.watch_interval
 
         self.ensure_selected_analysis()
         return changed
@@ -322,6 +347,12 @@ class DashboardApp:
             self.draw(stdscr)
             self.cycle_spinner()
 
+            # Watch mode: auto-rescan when timer expires
+            if (self.watch_mode and not self.running
+                    and self.watch_timer and time.time() >= self.watch_timer):
+                self.watch_timer = None
+                self.start_scan()
+
             key = stdscr.getch()
             if key == -1:
                 time.sleep(0.08)
@@ -371,6 +402,14 @@ class DashboardApp:
                     self.status_message = "Could not detect a default subnet."
                 else:
                     self.status_message = f"Target reset to {self.target}."
+            elif key in (ord("x"), ord("X")) and not self.running and self.results:
+                try:
+                    html_path = scan_history.export_html(
+                        self.results, self.target, self.ports, ai_cache=self.analysis_cache,
+                    )
+                    self.status_message = f"HTML report: {os.path.basename(html_path)}"
+                except OSError as exc:
+                    self.status_message = f"HTML export failed: {exc}"
             elif key in (ord("e"), ord("E")) and not self.running and self.results:
                 try:
                     csv_path = scan_history.export_csv(self.results, self.target, self.ports)
@@ -386,6 +425,15 @@ class DashboardApp:
                 else:
                     self.scan_mode = next_mode
                     self.status_message = f"Scan mode set to {self.scan_mode.upper()}. Press r to scan."
+            elif key in (ord("w"), ord("W")) and not self.running:
+                self.watch_mode = not self.watch_mode
+                if self.watch_mode:
+                    self.watch_previous_results = self.results if self.results else None
+                    self.watch_timer = time.time() + self.watch_interval
+                    self.status_message = f"Watch mode ON — rescanning every {self.watch_interval}s."
+                else:
+                    self.watch_timer = None
+                    self.status_message = "Watch mode OFF."
             elif key in (ord("m"), ord("M")) and not self.running:
                 if self.network_map_loading:
                     pass
@@ -409,9 +457,11 @@ class DashboardApp:
             ("d", "Reset target to auto-detected subnet"),
             ("u", "Cycle scan mode (TCP / UDP / Both)"),
             ("m", "Network map (discover hosts with OS detection)"),
+            ("w", "Toggle watch mode (auto-rescan every 60s)"),
             ("o", "Toggle open-only / open+closed view"),
             ("a", "Toggle AI analysis on/off"),
             ("e", "Export current results to CSV"),
+            ("x", "Export HTML security report"),
             ("h", "Browse scan history / diff"),
             ("↑/↓", "Navigate services"),
             ("q", "Quit"),
@@ -699,6 +749,9 @@ class DashboardApp:
             scan_state = f"MAPPING {SPINNER_FRAMES[self.spinner_index]}"
         elif self.analysis_loading_key is not None:
             scan_state = f"ANALYZING {SPINNER_FRAMES[self.spinner_index]}"
+        elif self.watch_mode and self.watch_timer and not self.running:
+            remaining = max(0, int(self.watch_timer - time.time()))
+            scan_state = f"WATCH {remaining}s"
         elif self.error_message:
             scan_state = "ERROR"
         stdscr.hline(0, 0, " ", width, self.color(COLOR_PANEL))
@@ -721,7 +774,7 @@ class DashboardApp:
         controls = [
             f"Target: {self.target}",
             f"Ports: {self.ports}  |  Mode: {self.scan_mode.upper()}",
-            f"View: {'OPEN + CLOSED' if self.show_closed else 'OPEN ONLY'}  |  AI: {'ON' if self.use_ai else 'OFF'}",
+            f"View: {'OPEN + CLOSED' if self.show_closed else 'OPEN ONLY'}  |  AI: {'ON' if self.use_ai else 'OFF'}  |  Watch: {'ON' if self.watch_mode else 'OFF'}",
             f"Status: {self.status_message}",
         ]
         control_attrs = [
