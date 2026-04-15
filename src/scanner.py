@@ -569,26 +569,24 @@ def scan_network_map(target, progress_callback=None):
     if os.geteuid() != 0:
         raise ScannerError("Network mapping with OS detection requires root. Run with sudo.")
 
-    # Discover live hosts first, then OS-detect only those
+    # Discover live hosts first, then OS-detect only those in one batch
     live = discover_hosts(target, announce=False)
     if not live:
         logger.info("No live hosts found on %s", target)
         return []
 
-    live_ips = [h["ip"] for h in live]
-    logger.info("Network map: OS-detecting %d live host(s)", len(live_ips))
+    live_ips = " ".join(h["ip"] for h in live)
+    logger.info("Network map: OS-detecting %d live host(s)", len(live))
+
+    try:
+        nm = nmap.PortScanner()
+        nm.scan(hosts=live_ips, arguments="-O -T4 -n --top-ports 100 --max-os-tries 1")
+    except (nmap.PortScannerError, OSError) as exc:
+        logger.error("Network map scan failed: %s", exc, exc_info=True)
+        raise ScannerError(f"Network map scan failed: {exc}") from exc
 
     hosts = []
-    for ip in live_ips:
-        logger.info("OS detection for %s", ip)
-        try:
-            nm = nmap.PortScanner()
-            nm.scan(hosts=ip, arguments="-O -T4 -n --top-ports 100")
-        except (nmap.PortScannerError, OSError) as exc:
-            logger.error("Network map scan failed for %s: %s", ip, exc, exc_info=True)
-            continue
-
-        for host in nm.all_hosts():
+    for host in nm.all_hosts():
             hostname = nm[host].hostname() or ""
             state = nm[host].state()
 
