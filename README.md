@@ -36,6 +36,7 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 ```
 src/
   scanner.py          # Core scanner, risk classification, AI prompts, CLI entry point
+  network_map.py      # Host discovery (ping sweep) and OS-detection mapping
   interactive_cli.py  # Full-screen curses dashboard
   scan_history.py     # JSON/CSV export, history listing, scan diffing
   validate_localhost.py  # Automated validation script

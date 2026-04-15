@@ -6,6 +6,7 @@ import threading
 import time
 from queue import Empty, Queue
 
+import network_map
 import scan_history
 import scanner
 
@@ -155,7 +156,7 @@ class DashboardApp:
 
     def _network_map_worker(self, subnet):
         try:
-            hosts = scanner.scan_network_map(subnet)
+            hosts = network_map.scan_network_map(subnet)
             self.events.put(("network_map", hosts))
         except scanner.ScannerError as exc:
             self.events.put(("network_map_error", str(exc)))
