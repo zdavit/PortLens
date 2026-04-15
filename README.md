@@ -16,6 +16,7 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 
 ## Features
 
+- **Network device mapping** — scan a subnet and view a table of all discovered hosts with hostname, OS guess (`nmap -O`), and open port count (press `m` in the dashboard)
 - **Full port scanning** — scan any range up to all 65535 ports with chunked, parallelized nmap (`-T4`, `-sV`)
 - **70+ service risk classifications** — covers remote access, web, databases, file sharing, printing, DNS, RPC, containers, and more
 - **Version-aware risk overrides** — outdated software (e.g., OpenSSH < 8.0, MySQL < 8.0, PostgreSQL < 13) is automatically escalated to a higher risk level
@@ -40,6 +41,7 @@ src/
   validate_localhost.py  # Automated validation script
 logs/                 # Debug/error logs (gitignored)
 scan_history/         # Saved scan results as JSON/CSV (gitignored)
+venv/                 # Python virtual environment (gitignored)
 ```
 
 ## Prerequisites
@@ -52,43 +54,20 @@ scan_history/         # Saved scan results as JSON/CSV (gitignored)
 ## Installation
 
 ```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-### CLI Mode
+Features that require root (network mapping with OS detection, UDP scanning) should be run with the venv's Python directly:
 
 ```bash
-# Scan localhost (default port range 1-1024)
-python3 src/scanner.py localhost
-
-# Scan a specific port range
-python3 src/scanner.py localhost -p 1-100
-
-# Scan all ports
-python3 src/scanner.py localhost -p 1-65535
-
-# Scan your local subnet (auto-detected)
-python3 src/scanner.py
-
-# Scan without AI analysis
-python3 src/scanner.py localhost --no-ai
-
-# Export results to CSV
-python3 src/scanner.py localhost --export csv
-
-# Export results to both JSON and CSV
-python3 src/scanner.py localhost --export both
-
-# View scan history
-python3 src/scanner.py --history
-
-# Diff against a previous scan
-python3 src/scanner.py localhost --diff scan_history/2026-04-13_15-47-42_localhost.json
+sudo venv/bin/python src/scanner.py --interactive
 ```
 
-If Ollama is not running, the scan still completes and reports a clear warning for the AI step instead of crashing.
+For full CLI usage details, run `python3 src/scanner.py --help`.
 
 ### Interactive Dashboard
 
@@ -108,6 +87,7 @@ Interactive mode starts with a quick `localhost` scan over ports `1-100` so the 
 | `t` | Edit target host or subnet |
 | `p` | Open port range menu (presets + custom) |
 | `f` | Set ports to 1-65535 (full scan) |
+| `m` | Network map — discover hosts with OS detection (requires root) |
 | `e` | Export current results to CSV |
 | `h` | Browse scan history and diff against current results |
 | `o` | Toggle open-only / open+closed port view |

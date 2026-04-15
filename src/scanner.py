@@ -486,6 +486,57 @@ def request_ai_response(prompt, announce_message=None):
 SCAN_MODES = ("tcp", "udp", "both")
 
 
+def scan_network_map(target, progress_callback=None):
+    """Discover hosts on a subnet with OS detection and open port counts.
+
+    Runs ``nmap -O -T4 -n --top-ports 100`` which requires root.
+    Returns a list of dicts: host, hostname, os_guess, open_port_count, state.
+    """
+    ensure_nmap_available()
+    if os.geteuid() != 0:
+        raise ScannerError("Network mapping with OS detection requires root. Run with sudo.")
+
+    logger.info("Network map scan starting: target=%s", target)
+    try:
+        nm = nmap.PortScanner()
+        nm.scan(hosts=target, arguments="-O -T4 -n --top-ports 100")
+    except (nmap.PortScannerError, OSError) as exc:
+        logger.error("Network map scan failed: %s", exc, exc_info=True)
+        raise ScannerError(f"Network map scan failed: {exc}") from exc
+
+    hosts = []
+    for host in nm.all_hosts():
+        hostname = nm[host].hostname() or ""
+        state = nm[host].state()
+
+        os_guess = "Unknown"
+        try:
+            os_matches = nm[host].get("osmatch", [])
+            if os_matches:
+                best = os_matches[0]
+                os_guess = f"{best.get('name', 'Unknown')} ({best.get('accuracy', '?')}%)"
+        except (KeyError, IndexError):
+            pass
+
+        open_count = 0
+        for proto in nm[host].all_protocols():
+            for port in nm[host][proto]:
+                if nm[host][proto][port].get("state") == "open":
+                    open_count += 1
+
+        hosts.append({
+            "host": host,
+            "hostname": hostname,
+            "os_guess": os_guess,
+            "open_port_count": open_count,
+            "state": state,
+        })
+
+    hosts.sort(key=lambda h: tuple(int(p) for p in h["host"].split(".") if p.isdigit()))
+    logger.info("Network map found %d host(s)", len(hosts))
+    return hosts
+
+
 def _check_root_for_scan(scan_mode):
     if scan_mode in ("udp", "both") and os.geteuid() != 0:
         raise ScannerError(

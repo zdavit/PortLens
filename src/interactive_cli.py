@@ -49,6 +49,9 @@ class DashboardApp:
         self.analysis_loading_key = None
         self.show_closed = False
         self.last_save_path = None
+        self.network_map = []
+        self.network_map_loading = False
+        self.network_map_worker = None
 
     def _safe_default_target(self):
         try:
@@ -133,6 +136,21 @@ class DashboardApp:
             self.events.put(("error", str(exc)))
             self.events.put(("done", None))
 
+    def start_network_map(self):
+        if self.running or self.network_map_loading:
+            return
+        self.network_map_loading = True
+        self.status_message = f"Mapping network hosts on {self.target} (requires root)..."
+        self.network_map_worker = threading.Thread(target=self._network_map_worker, daemon=True)
+        self.network_map_worker.start()
+
+    def _network_map_worker(self):
+        try:
+            hosts = scanner.scan_network_map(self.target)
+            self.events.put(("network_map", hosts))
+        except scanner.ScannerError as exc:
+            self.events.put(("network_map_error", str(exc)))
+
     def ensure_selected_analysis(self):
         if self.running or not self.use_ai or self.analysis_loading_key is not None:
             return
@@ -202,6 +220,13 @@ class DashboardApp:
                 self.analysis_errors[key] = warning
                 if self.analysis_loading_key == key:
                     self.analysis_loading_key = None
+            elif event == "network_map":
+                self.network_map = payload
+                self.network_map_loading = False
+                self.status_message = f"Network map: {len(payload)} host(s) discovered."
+            elif event == "network_map_error":
+                self.network_map_loading = False
+                self.status_message = f"Network map failed: {payload}"
             elif event == "error":
                 self.error_message = payload
                 self.status_message = "Scan failed."
@@ -223,7 +248,7 @@ class DashboardApp:
         self.ensure_selected_analysis()
 
     def cycle_spinner(self):
-        if self.running or self.analysis_loading_key is not None:
+        if self.running or self.analysis_loading_key is not None or self.network_map_loading:
             self.spinner_index = (self.spinner_index + 1) % len(SPINNER_FRAMES)
 
     def init_colors(self):
@@ -301,7 +326,9 @@ class DashboardApp:
 
             if key in (ord("q"), ord("Q")):
                 return 0
-            if key in (ord("r"), ord("R")):
+            if key == ord("?"):
+                self.show_help(stdscr)
+            elif key in (ord("r"), ord("R")):
                 self.start_scan()
             elif key in (ord("o"), ord("O")) and not self.running:
                 self.show_closed = not self.show_closed
@@ -356,12 +383,64 @@ class DashboardApp:
                 else:
                     self.scan_mode = next_mode
                     self.status_message = f"Scan mode set to {self.scan_mode.upper()}. Press r to scan."
+            elif key in (ord("m"), ord("M")) and not self.running:
+                if self.network_map_loading:
+                    pass
+                elif self.network_map:
+                    self.show_network_map(stdscr)
+                else:
+                    self.start_network_map()
             elif key in (ord("h"), ord("H")) and not self.running:
                 self.show_history_menu(stdscr)
             elif key == curses.KEY_UP:
                 self.move_selection(-1)
             elif key == curses.KEY_DOWN:
                 self.move_selection(1)
+
+    def show_help(self, stdscr):
+        HELP_LINES = [
+            ("r", "Run a scan"),
+            ("t", "Edit target host or subnet"),
+            ("p", "Open port range menu"),
+            ("f", "Set ports to 1-65535 (full scan)"),
+            ("d", "Reset target to auto-detected subnet"),
+            ("u", "Cycle scan mode (TCP / UDP / Both)"),
+            ("m", "Network map (discover hosts with OS detection)"),
+            ("o", "Toggle open-only / open+closed view"),
+            ("a", "Toggle AI analysis on/off"),
+            ("e", "Export current results to CSV"),
+            ("h", "Browse scan history / diff"),
+            ("↑/↓", "Navigate services"),
+            ("q", "Quit"),
+        ]
+
+        height, width = stdscr.getmaxyx()
+        box_height = len(HELP_LINES) + 5
+        box_width = min(55, max(40, width - 4))
+        start_y = max(1, (height - box_height) // 2)
+        start_x = max(2, (width - box_width) // 2)
+        window = curses.newwin(box_height, box_width, start_y, start_x)
+        window.keypad(True)
+
+        window.erase()
+        if self.has_colors:
+            window.attron(self.color(COLOR_PANEL))
+            window.border()
+            window.attroff(self.color(COLOR_PANEL))
+        else:
+            window.border()
+        window.addnstr(0, 2, " Keybindings ", box_width - 4,
+                       self.color(COLOR_ACCENT) | curses.A_BOLD)
+
+        for i, (key, desc) in enumerate(HELP_LINES):
+            window.addnstr(2 + i, 3, f"{key:>5}  {desc}", box_width - 6,
+                           self.color(COLOR_MUTED))
+
+        window.addnstr(box_height - 2, 3, "Press any key to close",
+                       box_width - 6, self.color(COLOR_MUTED))
+        window.refresh()
+        window.nodelay(False)
+        window.getch()
 
     def prompt_port_menu(self, stdscr):
         PORT_PRESETS = [
@@ -480,6 +559,85 @@ class DashboardApp:
                     self.status_message = f"Diff failed: {exc}"
                 return
 
+    def show_network_map(self, stdscr):
+        hosts = self.network_map
+        if not hosts:
+            self.status_message = "No network map data. Press m to scan."
+            return
+
+        height, width = stdscr.getmaxyx()
+        box_height = min(len(hosts) + 7, height - 4)
+        box_width = min(100, max(70, width - 4))
+        start_y = max(1, (height - box_height) // 2)
+        start_x = max(2, (width - box_width) // 2)
+        window = curses.newwin(box_height, box_width, start_y, start_x)
+        window.keypad(True)
+
+        selected = 0
+        scroll = 0
+        view_height = box_height - 7
+
+        while True:
+            window.erase()
+            if self.has_colors:
+                window.attron(self.color(COLOR_PANEL))
+                window.border()
+                window.attroff(self.color(COLOR_PANEL))
+            else:
+                window.border()
+            window.addnstr(0, 2, " Network Map ", box_width - 4,
+                           self.color(COLOR_ACCENT) | curses.A_BOLD)
+            summary = f"{len(hosts)} host(s) discovered on {self.target}"
+            window.addnstr(2, 2, summary, box_width - 4, self.color(COLOR_MUTED))
+
+            header = f"  {'Host':<17} {'Hostname':<16} {'State':<7} {'Ports':<6} OS Guess"
+            window.addnstr(4, 2, header, box_width - 4,
+                           self.color(COLOR_ACCENT) | curses.A_BOLD)
+
+            if selected < scroll:
+                scroll = selected
+            elif selected >= scroll + view_height:
+                scroll = selected - view_height + 1
+
+            visible = hosts[scroll:scroll + view_height]
+            for i, host in enumerate(visible):
+                actual = scroll + i
+                os_col = host["os_guess"][:box_width - 55]
+                line = (
+                    f"  {host['host']:<17} "
+                    f"{(host['hostname'] or 'N/A')[:15]:<16} "
+                    f"{host['state']:<7} "
+                    f"{host['open_port_count']:<6} "
+                    f"{os_col}"
+                )
+                if actual == selected:
+                    attr = self.color(COLOR_SELECTION, curses.A_REVERSE) | curses.A_BOLD
+                elif host["open_port_count"] == 0:
+                    attr = self.color(COLOR_MUTED)
+                elif host["open_port_count"] >= 5:
+                    attr = self.color(COLOR_WARNING) | curses.A_BOLD
+                else:
+                    attr = self.color(COLOR_SUCCESS)
+                window.addnstr(5 + i, 2, line, box_width - 4, attr)
+
+            footer = "↑↓ navigate | r rescan | q close"
+            window.addnstr(box_height - 2, 2, footer, box_width - 4,
+                           self.color(COLOR_MUTED))
+            window.refresh()
+
+            key = window.getch()
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            elif key in (curses.KEY_UP, ord("k")):
+                selected = (selected - 1) % len(hosts)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                selected = (selected + 1) % len(hosts)
+            elif key in (ord("r"), ord("R")):
+                del window
+                self.network_map = []
+                self.start_network_map()
+                return
+
     def prompt_input(self, stdscr, label, current_value):
         height, width = stdscr.getmaxyx()
         box_width = min(max(50, len(current_value) + 10), max(40, width - 4))
@@ -528,6 +686,8 @@ class DashboardApp:
         scan_state = "IDLE"
         if self.running:
             scan_state = f"SCANNING {SPINNER_FRAMES[self.spinner_index]}"
+        elif self.network_map_loading:
+            scan_state = f"MAPPING {SPINNER_FRAMES[self.spinner_index]}"
         elif self.analysis_loading_key is not None:
             scan_state = f"ANALYZING {SPINNER_FRAMES[self.spinner_index]}"
         elif self.error_message:
@@ -542,7 +702,7 @@ class DashboardApp:
             self.status_attr(),
         )
 
-        top_height = 8
+        top_height = 7
         content_top = top_height + 1
         body_height = height - content_top - 2
         left_width = max(40, width // 2)
@@ -552,26 +712,17 @@ class DashboardApp:
         controls = [
             f"Target: {self.target}",
             f"Ports: {self.ports}  |  Mode: {self.scan_mode.upper()}",
-            f"View: {'OPEN + CLOSED' if self.show_closed else 'OPEN ONLY'}",
-            f"AI Analysis: {'ON' if self.use_ai else 'OFF'}",
-            "Keys: r scan | t target | p ports | f full | u tcp/udp | e export | h history | o closed | a ai | q",
+            f"View: {'OPEN + CLOSED' if self.show_closed else 'OPEN ONLY'}  |  AI: {'ON' if self.use_ai else 'OFF'}",
             f"Status: {self.status_message}",
         ]
-        for index, line in enumerate(controls, start=1):
-            attr = curses.A_NORMAL
-            if index == 1:
-                attr = self.color(COLOR_ACCENT) | curses.A_BOLD
-            elif index == 2:
-                attr = self.color(COLOR_PANEL) | curses.A_BOLD
-            elif index == 3:
-                attr = self.color(COLOR_MUTED) | curses.A_BOLD
-            elif index == 4:
-                attr = (self.color(COLOR_AI) if self.use_ai else self.color(COLOR_MUTED)) | curses.A_BOLD
-            elif index == 5:
-                attr = self.color(COLOR_MUTED)
-            elif index == 6:
-                attr = self.status_attr()
-            stdscr.addnstr(1 + index, 2, line, width - 4, attr)
+        control_attrs = [
+            self.color(COLOR_ACCENT) | curses.A_BOLD,
+            self.color(COLOR_PANEL) | curses.A_BOLD,
+            self.color(COLOR_MUTED) | curses.A_BOLD,
+            self.status_attr(),
+        ]
+        for index, (line, attr) in enumerate(zip(controls, control_attrs)):
+            stdscr.addnstr(2 + index, 2, line, width - 4, attr)
 
         ports_title = "Ports" if self.show_closed else "Open Services"
         self.draw_box(stdscr, content_top, 0, body_height, left_width, ports_title)
@@ -580,7 +731,7 @@ class DashboardApp:
         self.draw_box(stdscr, content_top, left_width, body_height, right_width + 1, "Details")
         self.draw_detail_pane(stdscr, content_top, left_width, body_height, right_width + 1)
 
-        footer = "Interactive mode keeps the UI live while scans run in the background."
+        footer = "? help | r scan | q quit"
         stdscr.hline(height - 1, 0, " ", width, self.color(COLOR_PANEL))
         stdscr.addnstr(height - 1, 2, footer, width - 4, self.color(COLOR_MUTED))
         stdscr.refresh()
