@@ -6,7 +6,7 @@
 
 ## Medium Priority
 
-- [ ] **Restrict `--diff` file reads** — only allow loading files from `scan_history/`, canonicalize paths to prevent arbitrary file reads (especially dangerous when running as root)
+- [x] **Restrict `--diff` file reads** — only allow loading files from `scan_history/`, canonicalize paths to prevent arbitrary file reads (especially dangerous when running as root)
 - [ ] **Scan data file permissions** — set `0700` on directories and `0600` on saved JSON/CSV files so scan results aren't world-readable
 - [ ] **Sanitize service banners** — strip control characters and ANSI escapes from nmap output before displaying in terminal or sending to AI to prevent terminal escape injection
 - [ ] **Scan scheduling / watch mode** — re-scan on a configurable interval and alert when something changes (new port opens, service disappears)

@@ -105,7 +105,15 @@ def list_history():
 
 
 def load_scan(filepath):
-    with open(filepath) as f:
+    """Load a scan JSON file. Only allows files inside HISTORY_DIR."""
+    real_path = os.path.realpath(filepath)
+    allowed_dir = os.path.realpath(HISTORY_DIR)
+    if not real_path.startswith(allowed_dir + os.sep) and real_path != allowed_dir:
+        raise OSError(
+            f"Access denied: scan files must be inside {HISTORY_DIR}/. "
+            f"Got: {filepath}"
+        )
+    with open(real_path) as f:
         return json.load(f)
 
 
