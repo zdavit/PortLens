@@ -31,9 +31,7 @@ class DashboardApp:
         self.ports = initial_ports or scanner.DEFAULT_PORT_RANGE
         self.use_ai = initial_use_ai
         self.scan_mode = initial_scan_mode
-        self.status_message = (
-            "Interactive mode starts with a quick localhost scan. Press d for your subnet."
-        )
+        self.status_message = "Press r to scan, m for network map, or ? for help."
         self.results = []
         self.error_message = ""
         self.selected_index = 0
@@ -43,7 +41,6 @@ class DashboardApp:
         self.worker = None
         self.analysis_worker = None
         self.events = Queue()
-        self.auto_started = False
         self.has_colors = False
         self.analysis_cache = {}
         self.analysis_errors = {}
@@ -321,10 +318,6 @@ class DashboardApp:
         self.init_colors()
 
         while True:
-            if not self.auto_started:
-                self.auto_started = True
-                self.start_scan()
-
             self.process_events()
             self.draw(stdscr)
             self.cycle_spinner()
@@ -631,7 +624,7 @@ class DashboardApp:
                     attr = self.color(COLOR_SUCCESS)
                 window.addnstr(5 + i, 2, line, box_width - 4, attr)
 
-            footer = "↑↓ navigate | r rescan | q close"
+            footer = "↑↓ navigate | Enter select target | r rescan | q close"
             window.addnstr(box_height - 2, 2, footer, box_width - 4,
                            self.color(COLOR_MUTED))
             window.refresh()
@@ -643,6 +636,11 @@ class DashboardApp:
                 selected = (selected - 1) % len(hosts)
             elif key in (curses.KEY_DOWN, ord("j")):
                 selected = (selected + 1) % len(hosts)
+            elif key in (10, curses.KEY_ENTER):
+                chosen = hosts[selected]
+                self.target = chosen["host"]
+                self.status_message = f"Target set to {self.target}. Press r to scan."
+                return
             elif key in (ord("r"), ord("R")):
                 del window
                 self.network_map = []

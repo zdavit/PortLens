@@ -74,7 +74,7 @@ sudo venv/bin/python src/scanner.py --interactive
 
 For full CLI usage details, run `python3 src/scanner.py --help`.
 
-Interactive mode starts with a quick `localhost` scan over ports `1-100` so the screen feels responsive immediately. Press `d` any time to switch back to the auto-detected local subnet for a broader scan.
+Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover hosts on your subnet, or `?` for all keybindings. Selecting a host in the network map sets it as the scan target.
 
 #### Keybindings
 
