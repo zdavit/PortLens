@@ -61,21 +61,17 @@ pip install -r requirements.txt
 
 ## Usage
 
-Features that require root (network mapping with OS detection, UDP scanning) should be run with the venv's Python directly:
-
 ```bash
+# Basic scanning (no root needed)
+python3 src/scanner.py --interactive
+
+# With root — required for network mapping (m key), UDP scanning, and OS detection
 sudo venv/bin/python src/scanner.py --interactive
 ```
 
+> **Note:** Using `sudo venv/bin/python` runs as root while keeping your venv packages. Do **not** use `sudo pip install` — it can break system packages.
+
 For full CLI usage details, run `python3 src/scanner.py --help`.
-
-### Interactive Dashboard
-
-Launch the dashboard with:
-
-```bash
-python3 src/scanner.py --interactive
-```
 
 Interactive mode starts with a quick `localhost` scan over ports `1-100` so the screen feels responsive immediately. Press `d` any time to switch back to the auto-detected local subnet for a broader scan.
 

@@ -1,12 +1,20 @@
 # TODO
 
-## Features
+## High Priority
 
-- [x] **Network device mapping** — scan a subnet and display a table of all discovered hosts with hostname, OS guess (`nmap -O`), and open port count
-- [ ] **Security score summary** — compute an overall risk score per host (e.g., "Host 192.168.1.5: 72/100") based on number and severity of open services
+- [ ] **Target input validation** — reject targets with shell characters, require valid IP/CIDR/hostname, block strings starting with `-` to prevent nmap option injection
+
+## Medium Priority
+
+- [ ] **Restrict `--diff` file reads** — only allow loading files from `scan_history/`, canonicalize paths to prevent arbitrary file reads (especially dangerous when running as root)
+- [ ] **Scan data file permissions** — set `0700` on directories and `0600` on saved JSON/CSV files so scan results aren't world-readable
+- [ ] **Sanitize service banners** — strip control characters and ANSI escapes from nmap output before displaying in terminal or sending to AI to prevent terminal escape injection
 - [ ] **Scan scheduling / watch mode** — re-scan on a configurable interval and alert when something changes (new port opens, service disappears)
 - [ ] **HTML/PDF report export** — generate a shareable security report from scan results + AI analysis
-- [x] **UDP scanning** — TCP, UDP, and combined scanning with `--udp`, `--both` flags and `u` key toggle
+
+## Low Priority
+
+- [ ] **Pin dependencies** — lock `python-nmap` to an exact version in `requirements.txt` and run `pip-audit` to catch known vulnerabilities
 - [ ] **Firewall rule suggestions** — based on open ports, generate `iptables`/`firewalld` rules to close unnecessary ones
 - [ ] **Web interface** — Flask/FastAPI frontend with a browser-based dashboard instead of just the curses CLI
 
@@ -24,3 +32,6 @@
 - [x] Structured logging to `logs/scanner.log`
 - [x] Organized source code into `src/` folder
 - [x] Updated README with full documentation
+- [x] UDP scanning — TCP, UDP, and combined scanning with `--udp`, `--both` flags and `u` key toggle
+- [x] Network device mapping — scan a subnet and display a table of all discovered hosts with hostname, OS guess, and open port count
+- [x] Security score summary — compute an overall risk score per host based on number and severity of open services

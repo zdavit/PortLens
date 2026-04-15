@@ -139,14 +139,20 @@ class DashboardApp:
     def start_network_map(self):
         if self.running or self.network_map_loading:
             return
+        try:
+            subnet = scanner.get_default_target()
+        except scanner.ScannerError as exc:
+            self.status_message = f"Could not detect subnet: {exc}"
+            return
         self.network_map_loading = True
-        self.status_message = f"Mapping network hosts on {self.target} (requires root)..."
-        self.network_map_worker = threading.Thread(target=self._network_map_worker, daemon=True)
+        self.network_map_subnet = subnet
+        self.status_message = f"Mapping network hosts on {subnet} (requires root)..."
+        self.network_map_worker = threading.Thread(target=self._network_map_worker, args=(subnet,), daemon=True)
         self.network_map_worker.start()
 
-    def _network_map_worker(self):
+    def _network_map_worker(self, subnet):
         try:
-            hosts = scanner.scan_network_map(self.target)
+            hosts = scanner.scan_network_map(subnet)
             self.events.put(("network_map", hosts))
         except scanner.ScannerError as exc:
             self.events.put(("network_map_error", str(exc)))
@@ -587,7 +593,8 @@ class DashboardApp:
                 window.border()
             window.addnstr(0, 2, " Network Map ", box_width - 4,
                            self.color(COLOR_ACCENT) | curses.A_BOLD)
-            summary = f"{len(hosts)} host(s) discovered on {self.target}"
+            subnet = getattr(self, "network_map_subnet", self.target)
+            summary = f"{len(hosts)} host(s) discovered on {subnet}"
             window.addnstr(2, 2, summary, box_width - 4, self.color(COLOR_MUTED))
 
             header = f"  {'Host':<17} {'Hostname':<16} {'State':<7} {'Ports':<6} OS Guess"
@@ -876,6 +883,10 @@ class DashboardApp:
             selected_service = services[self.selected_index]
             selected_key = self.service_key(selected_service)
             lines.append(f"Host: {selected_service['host']} ({selected_service['hostname']})")
+            host_info = next((h for h in self.results if h["host"] == selected_service["host"]), None)
+            if host_info:
+                score = scanner.compute_host_score(host_info)
+                lines.append(f"Security Score: {score}/100 ({scanner.score_label(score)})")
             lines.append(f"Port: {selected_service['port']}")
             lines.append(f"Service: {selected_service['service']}")
             lines.append(f"State: {selected_service['state']}")
@@ -940,6 +951,15 @@ class DashboardApp:
                 attr = self.color(COLOR_WARNING) | curses.A_BOLD
             elif line.startswith("Risk:") and selected_service:
                 attr = self.row_attr(selected_service)
+            elif line.startswith("Security Score:"):
+                if "Critical" in line or "Poor" in line:
+                    attr = self.color(COLOR_DANGER) | curses.A_BOLD
+                elif "Fair" in line:
+                    attr = self.color(COLOR_WARNING) | curses.A_BOLD
+                elif "Good" in line:
+                    attr = self.color(COLOR_SUCCESS) | curses.A_BOLD
+                else:
+                    attr = self.color(COLOR_SUCCESS) | curses.A_BOLD
             elif line.startswith(("Host:", "Port:", "Service:", "Product:", "State:")):
                 attr = self.color(COLOR_MUTED) | curses.A_BOLD
             elif selected_key and selected_key in self.analysis_errors:

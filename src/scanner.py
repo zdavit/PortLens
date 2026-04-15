@@ -186,6 +186,35 @@ def classify_risk(service_name, product="", version=""):
 
     return base_risk
 
+RISK_PENALTIES = {
+    "Critical": 25,
+    "High": 15,
+    "Medium": 8,
+    "Low": 3,
+    "Unknown": 5,
+}
+
+
+def compute_host_score(host_info):
+    """Return a 0-100 security score for a host. 100 = no open services."""
+    penalty = 0
+    for svc in host_info.get("services", []):
+        penalty += RISK_PENALTIES.get(svc.get("risk", "Unknown"), 5)
+    return max(0, 100 - penalty)
+
+
+def score_label(score):
+    if score >= 90:
+        return "Excellent"
+    if score >= 70:
+        return "Good"
+    if score >= 50:
+        return "Fair"
+    if score >= 30:
+        return "Poor"
+    return "Critical"
+
+
 COMMON_EDUCATIONAL_PORTS = [
     21,
     22,
