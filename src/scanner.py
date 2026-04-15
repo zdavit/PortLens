@@ -1,7 +1,9 @@
 import argparse
+import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import time
@@ -250,6 +252,47 @@ def ensure_nmap_available():
         raise ScannerError(
             "The `nmap` command is not installed or not on PATH. Install nmap first."
         )
+
+
+_HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
+
+
+def validate_target(target):
+    """Validate and sanitize a scan target. Returns the cleaned target string."""
+    if not target or not target.strip():
+        raise ScannerError("Target cannot be empty.")
+
+    target = target.strip()
+
+    if target.startswith("-"):
+        raise ScannerError("Invalid target: must not start with '-'.")
+
+    dangerous = [" ", "\t", "\n", "\r", ";", "&", "|", "$", "`", "(", ")", "{", "}", "<", ">", "\\", "'", '"']
+    for ch in dangerous:
+        if ch in target:
+            raise ScannerError(f"Invalid target: contains disallowed character '{ch}'.")
+
+    if target == "localhost":
+        return target
+
+    # Try as IP address
+    try:
+        if "/" in target:
+            net = ipaddress.ip_network(target, strict=False)
+            if net.prefixlen < 16:
+                raise ScannerError("Subnet too large: minimum prefix length is /16.")
+            return str(net)
+        else:
+            ipaddress.ip_address(target)
+            return target
+    except ValueError:
+        pass
+
+    # Try as hostname
+    if _HOSTNAME_RE.fullmatch(target) and ".." not in target:
+        return target
+
+    raise ScannerError("Target must be an IP address, CIDR range (e.g. 192.168.1.0/24), 'localhost', or a valid hostname.")
 
 
 def get_local_ip():
@@ -521,6 +564,7 @@ def scan_network_map(target, progress_callback=None):
     Runs ``nmap -O -T4 -n --top-ports 100`` which requires root.
     Returns a list of dicts: host, hostname, os_guess, open_port_count, state.
     """
+    target = validate_target(target)
     ensure_nmap_available()
     if os.geteuid() != 0:
         raise ScannerError("Network mapping with OS detection requires root. Run with sudo.")
@@ -600,6 +644,7 @@ def _merge_host_info(combined, host_info):
 
 
 def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callback=None, scan_mode="tcp"):
+    target = validate_target(target)
     _check_root_for_scan(scan_mode)
     ports = validate_ports_spec(ports)
     total_ports = count_ports_in_spec(ports)

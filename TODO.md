@@ -2,7 +2,7 @@
 
 ## High Priority
 
-- [ ] **Target input validation** — reject targets with shell characters, require valid IP/CIDR/hostname, block strings starting with `-` to prevent nmap option injection
+- [x] **Target input validation** — reject targets with shell characters, require valid IP/CIDR/hostname, block strings starting with `-` to prevent nmap option injection
 
 ## Medium Priority
 
