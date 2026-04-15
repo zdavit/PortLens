@@ -120,8 +120,11 @@ class DashboardApp:
         self.worker.start()
 
     def _scan_worker(self):
-        def on_progress(scanned, total):
-            self.events.put(("progress", (scanned, total)))
+        def on_progress(scanned, total, message=None):
+            if message:
+                self.events.put(("status", message))
+            else:
+                self.events.put(("progress", (scanned, total)))
 
         try:
             mode_label = self.scan_mode.upper()
@@ -198,7 +201,7 @@ class DashboardApp:
             if event == "progress":
                 scanned, total = payload
                 pct = int(scanned / total * 100) if total else 100
-                self.status_message = f"Scanning... {scanned}/{total} ports ({pct}%)"
+                self.status_message = f"Scanning... {scanned}/{total} chunks ({pct}%)"
             elif event == "status":
                 self.status_message = payload
             elif event == "results":

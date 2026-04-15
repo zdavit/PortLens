@@ -643,6 +643,46 @@ def _merge_host_info(combined, host_info):
         entry["hostname"] = host_info["hostname"]
 
 
+def _is_subnet_target(target):
+    """Check if the target is a subnet (CIDR) rather than a single host."""
+    try:
+        net = ipaddress.ip_network(target, strict=False)
+        return net.num_addresses > 1
+    except ValueError:
+        return False
+
+
+def discover_hosts(target, announce=True, progress_callback=None):
+    """Run a fast ping sweep to find live hosts on a subnet."""
+    ensure_nmap_available()
+    logger.info("Host discovery starting: target=%s", target)
+    if announce:
+        print(f"\n🔎 Discovering live hosts on {target}...")
+    if progress_callback:
+        progress_callback(0, 0, "Discovering live hosts...")
+
+    try:
+        nm = nmap.PortScanner()
+        nm.scan(hosts=target, arguments="-sn -T4 -n")
+    except (nmap.PortScannerError, OSError) as exc:
+        logger.error("Host discovery failed: %s", exc, exc_info=True)
+        raise ScannerError(f"Host discovery failed: {exc}") from exc
+
+    live_hosts = []
+    for host in nm.all_hosts():
+        if nm[host].state() == "up":
+            live_hosts.append({
+                "ip": host,
+                "hostname": nm[host].hostname() or "",
+            })
+
+    live_hosts.sort(key=lambda h: tuple(int(p) for p in h["ip"].split(".") if p.isdigit()))
+    logger.info("Host discovery found %d live host(s)", len(live_hosts))
+    if announce:
+        print(f"   Found {len(live_hosts)} live host(s).")
+    return live_hosts
+
+
 def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callback=None, scan_mode="tcp"):
     target = validate_target(target)
     _check_root_for_scan(scan_mode)
@@ -654,56 +694,71 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
         print(f"\n🔍 Scanning {target} (ports {ports}, {mode_label})...")
     ensure_nmap_available()
 
+    # For subnet targets, discover live hosts first to avoid scanning dead IPs
+    if _is_subnet_target(target):
+        live = discover_hosts(target, announce=announce, progress_callback=progress_callback)
+        if not live:
+            logger.info("No live hosts found on %s", target)
+            return []
+        scan_targets = [h["ip"] for h in live]
+        logger.info("Scanning %d live host(s) instead of full subnet", len(scan_targets))
+        if announce:
+            print(f"   Scanning {len(scan_targets)} live host(s) on ports {ports}...")
+    else:
+        scan_targets = [target]
+
     chunks = chunk_port_spec(ports)
     logger.info("Split into %d chunk(s) of up to %d ports each", len(chunks), SCAN_CHUNK_SIZE)
 
     combined = {}
-    scanned_ports = 0
+    total_work = len(scan_targets) * len(chunks)
+    completed_work = 0
     scan_start = time.time()
 
-    for chunk_index, chunk_spec in enumerate(chunks):
-        chunk_count = count_ports_in_spec(chunk_spec)
-        logger.info("Scanning chunk %d/%d: ports %s", chunk_index + 1, len(chunks), chunk_spec)
+    for host_target in scan_targets:
+        for chunk_index, chunk_spec in enumerate(chunks):
+            chunk_count = count_ports_in_spec(chunk_spec)
+            logger.info("Scanning host %s chunk %d/%d: ports %s", host_target, chunk_index + 1, len(chunks), chunk_spec)
 
-        try:
-            nm = nmap.PortScanner()
-            nm.scan(hosts=target, arguments=_nmap_scan_args(scan_mode, chunk_spec))
-        except (nmap.PortScannerError, OSError) as exc:
-            logger.error("nmap scan failed on chunk %s: %s", chunk_spec, exc, exc_info=True)
-            raise ScannerError(f"nmap failed while scanning {target}: {exc}") from exc
+            try:
+                nm = nmap.PortScanner()
+                nm.scan(hosts=host_target, arguments=_nmap_scan_args(scan_mode, chunk_spec))
+            except (nmap.PortScannerError, OSError) as exc:
+                logger.error("nmap scan failed on %s chunk %s: %s", host_target, chunk_spec, exc, exc_info=True)
+                raise ScannerError(f"nmap failed while scanning {host_target}: {exc}") from exc
 
-        for host in nm.all_hosts():
-            host_info = {
-                "host": host,
-                "hostname": nm[host].hostname(),
-                "state": nm[host].state(),
-                "services": [],
-                "ports": [],
-            }
-            for proto in nm[host].all_protocols():
-                ports_list = sorted(nm[host][proto].keys())
-                for port in ports_list:
-                    info = nm[host][proto][port]
-                    service_name = info.get("name", "unknown")
-                    product = info.get("product", "")
-                    version = info.get("version", "")
-                    port_record = {
-                        "port": port,
-                        "protocol": proto,
-                        "state": info.get("state", "unknown"),
-                        "service": service_name,
-                        "product": product,
-                        "version": version,
-                        "risk": classify_risk(service_name, product, version),
-                    }
-                    host_info["ports"].append(port_record)
-                    if port_record["state"] == "open":
-                        host_info["services"].append(port_record.copy())
-            _merge_host_info(combined, host_info)
+            for host in nm.all_hosts():
+                host_info = {
+                    "host": host,
+                    "hostname": nm[host].hostname(),
+                    "state": nm[host].state(),
+                    "services": [],
+                    "ports": [],
+                }
+                for proto in nm[host].all_protocols():
+                    ports_list = sorted(nm[host][proto].keys())
+                    for port in ports_list:
+                        info = nm[host][proto][port]
+                        service_name = info.get("name", "unknown")
+                        product = info.get("product", "")
+                        version = info.get("version", "")
+                        port_record = {
+                            "port": port,
+                            "protocol": proto,
+                            "state": info.get("state", "unknown"),
+                            "service": service_name,
+                            "product": product,
+                            "version": version,
+                            "risk": classify_risk(service_name, product, version),
+                        }
+                        host_info["ports"].append(port_record)
+                        if port_record["state"] == "open":
+                            host_info["services"].append(port_record.copy())
+                _merge_host_info(combined, host_info)
 
-        scanned_ports += chunk_count
-        if progress_callback:
-            progress_callback(scanned_ports, total_ports)
+            completed_work += 1
+            if progress_callback:
+                progress_callback(completed_work, total_work)
 
     scan_elapsed = time.time() - scan_start
     logger.info("nmap scan finished in %.1f seconds", scan_elapsed)
