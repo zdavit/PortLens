@@ -385,8 +385,13 @@ class DashboardApp:
             elif key in (ord("t"), ord("T")) and not self.running:
                 updated = self.prompt_input(stdscr, "Target", self.target)
                 if updated is not None:
-                    self.target = updated.strip() or self.target
-                    self.status_message = f"Target set to {self.target}."
+                    raw = updated.strip()
+                    if raw:
+                        try:
+                            self.target = scanner.validate_target(raw)
+                            self.status_message = f"Target set to {self.target}."
+                        except scanner.ScannerError as exc:
+                            self.status_message = str(exc)
             elif key in (ord("f"), ord("F")) and not self.running:
                 self.ports = "1-65535"
                 self.status_message = "Ports set to 1-65535 (full scan). Press r to scan."

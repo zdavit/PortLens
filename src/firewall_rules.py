@@ -12,6 +12,13 @@ SAFE_PORTS = {
 }
 
 RISK_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Unknown": 4}
+ALLOWED_PROTOCOLS = {"tcp", "udp"}
+
+
+def _safe_label(text):
+    """Strip shell-unsafe characters from a label used in generated commands."""
+    import re
+    return re.sub(r"[^A-Za-z0-9 _.()/,-]", "", str(text))[:60]
 
 
 def _should_block(service):
@@ -56,9 +63,9 @@ def generate_iptables_rules(results):
         "",
     ]
     for svc in services:
-        proto = svc["protocol"]
-        port = svc["port"]
-        comment = f"{svc['service']} ({svc['risk']})"
+        proto = svc["protocol"] if svc["protocol"] in ALLOWED_PROTOCOLS else "tcp"
+        port = int(svc["port"])
+        comment = _safe_label(f"{svc['service']} ({svc['risk']})")
         lines.append(
             f"iptables -A INPUT -p {proto} --dport {port} "
             f'-j DROP -m comment --comment "{comment}"'
@@ -84,10 +91,10 @@ def generate_firewalld_rules(results):
         "",
     ]
     for svc in services:
-        proto = svc["protocol"]
-        port = svc["port"]
-        comment = f"# {svc['service']} ({svc['risk']})"
-        lines.append(comment)
+        proto = svc["protocol"] if svc["protocol"] in ALLOWED_PROTOCOLS else "tcp"
+        port = int(svc["port"])
+        comment = _safe_label(f"{svc['service']} ({svc['risk']})")
+        lines.append(f"# {comment}")
         lines.append(
             f"firewall-cmd --permanent --remove-port={port}/{proto}"
         )
@@ -113,8 +120,9 @@ def generate_rules_text(results):
         "",
     ]
     for svc in services:
+        proto = svc["protocol"] if svc["protocol"] in ALLOWED_PROTOCOLS else "tcp"
         summary_lines.append(
-            f"  • Port {svc['port']}/{svc['protocol']} — {svc['service']} ({svc['risk']})"
+            f"  • Port {int(svc['port'])}/{proto} — {_safe_label(svc['service'])} ({svc['risk']})"
         )
 
     iptables = generate_iptables_rules(results)

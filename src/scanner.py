@@ -269,6 +269,15 @@ def sanitize_banner(text):
     return text[:MAX_BANNER_LEN]
 
 
+def sanitize_text(text):
+    """Strip control characters and ANSI escapes from arbitrary text (no truncation)."""
+    if not text:
+        return text
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = _CONTROL_CHAR_RE.sub("", text)
+    return text
+
+
 def validate_target(target):
     """Validate and sanitize a scan target. Returns the cleaned target string."""
     if not target or not target.strip():
@@ -564,7 +573,7 @@ def request_ai_response(prompt, announce_message=None):
     if not response:
         logger.warning("AI returned an empty response")
         raise AIAnalysisError("Ollama returned an empty analysis.")
-    return response
+    return sanitize_text(response)
 
 
 SCAN_MODES = ("tcp", "udp", "both")

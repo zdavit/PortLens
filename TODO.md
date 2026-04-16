@@ -7,9 +7,9 @@
 
 ## Medium Priority
 
-- [ ] **Sanitize AI output** — strip control characters and ANSI escapes from Ollama responses before displaying in the terminal/TUI
-- [ ] **Firewall rule shell safety** — sanitize service names interpolated into generated shell commands to prevent quote/metacharacter injection when users copy-paste
-- [ ] **Validate interactive target immediately** — run `validate_target()` on user input before storing in `self.target` instead of waiting until scan time
+- [x] **Sanitize AI output** — strip control characters and ANSI escapes from Ollama responses before displaying in the terminal/TUI
+- [x] **Firewall rule shell safety** — sanitize service names interpolated into generated shell commands to prevent quote/metacharacter injection when users copy-paste
+- [x] **Validate interactive target immediately** — run `validate_target()` on user input before storing in `self.target` instead of waiting until scan time
 
 ## Low Priority
 
