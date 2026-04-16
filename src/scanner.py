@@ -32,8 +32,8 @@ except ImportError:
     nmap = None
 
 
-SCAN_CHUNK_SIZE = 4096
-SCAN_PARALLEL_CHUNKS = 4
+SCAN_CHUNK_SIZE = 2048
+SCAN_PARALLEL_CHUNKS = 8
 DEFAULT_PORT_RANGE = "1-1024"
 INTERACTIVE_DEFAULT_TARGET = "localhost"
 INTERACTIVE_DEFAULT_PORT_RANGE = "1-100"
@@ -594,12 +594,13 @@ def _check_root_for_scan(scan_mode):
 
 
 def _nmap_scan_args(scan_mode, chunk_spec):
+    base = "--version-intensity 0 -T4 --min-rate 300 -n"
     if scan_mode == "udp":
-        return f"-sU --version-intensity 0 -T4 -n -p {chunk_spec}"
+        return f"-sU {base} -p {chunk_spec}"
     elif scan_mode == "both":
-        return f"-sS -sU -sV --version-intensity 0 -T4 -n -p {chunk_spec}"
+        return f"-sS -sU -sV {base} -p {chunk_spec}"
     else:
-        return f"-sV --version-intensity 0 -T4 -n -p {chunk_spec}"
+        return f"-sV {base} -p {chunk_spec}"
 
 
 def _merge_host_info(combined, host_info, lock=None):
