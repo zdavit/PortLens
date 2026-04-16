@@ -855,6 +855,11 @@ def main():
         help="Compare current scan against a previous scan JSON file",
     )
     parser.add_argument(
+        "--firewall",
+        action="store_true",
+        help="Generate iptables/firewalld rules to block high-risk open ports",
+    )
+    parser.add_argument(
         "--udp",
         action="store_true",
         help="Scan UDP ports instead of TCP (requires root/sudo)",
@@ -929,6 +934,14 @@ def main():
                 print("  🔄 Scan Diff")
                 print(f"{'='*60}")
                 print(scan_history.format_diff(diff))
+
+        if args.firewall:
+            import firewall_rules
+            rules_text = firewall_rules.generate_rules_text(results)
+            print(f"\n{'='*60}")
+            print("  🔥 Firewall Rule Suggestions")
+            print(f"{'='*60}")
+            print(rules_text)
 
         if not args.no_ai:
             all_services = collect_open_services(results)

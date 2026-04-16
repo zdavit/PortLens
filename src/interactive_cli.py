@@ -6,6 +6,7 @@ import threading
 import time
 from queue import Empty, Queue
 
+import firewall_rules
 import network_map
 import scan_history
 import scanner
@@ -445,6 +446,8 @@ class DashboardApp:
                     self.show_network_map(stdscr)
                 else:
                     self.start_network_map()
+            elif key in (ord("g"), ord("G")) and not self.running and self.results:
+                self.show_firewall_rules(stdscr)
             elif key in (ord("h"), ord("H")) and not self.running:
                 self.show_history_menu(stdscr)
             elif key == curses.KEY_UP:
@@ -466,6 +469,7 @@ class DashboardApp:
             ("u", "Cycle scan mode (TCP / UDP / Both)"),
             ("m", "Network map (discover hosts with OS detection)"),
             ("w", "Toggle watch mode (auto-rescan every 60s)"),
+            ("g", "Generate firewall rules for risky ports"),
             ("o", "Toggle open-only / open+closed view"),
             ("a", "Toggle AI analysis on/off"),
             ("e", "Export current results to CSV"),
@@ -704,6 +708,73 @@ class DashboardApp:
                 del window
                 self.network_map = []
                 self.start_network_map()
+                return
+
+    def show_firewall_rules(self, stdscr):
+        text = firewall_rules.generate_rules_text(self.results)
+        lines = text.splitlines()
+
+        height, width = stdscr.getmaxyx()
+        box_height = min(len(lines) + 6, height - 4)
+        box_width = min(90, max(60, width - 4))
+        start_y = max(1, (height - box_height) // 2)
+        start_x = max(2, (width - box_width) // 2)
+        window = curses.newwin(box_height, box_width, start_y, start_x)
+        window.keypad(True)
+
+        scroll = 0
+        view_height = box_height - 5
+
+        while True:
+            window.erase()
+            if self.has_colors:
+                window.attron(self.color(COLOR_PANEL))
+                window.border()
+                window.attroff(self.color(COLOR_PANEL))
+            else:
+                window.border()
+            window.addnstr(0, 2, " Firewall Rules ", box_width - 4,
+                           self.color(COLOR_ACCENT) | curses.A_BOLD)
+
+            visible = lines[scroll:scroll + view_height]
+            for i, line in enumerate(visible):
+                attr = curses.A_NORMAL
+                if line.startswith("#"):
+                    attr = self.color(COLOR_MUTED)
+                elif line.startswith("  •") or line.startswith("Found"):
+                    attr = self.color(COLOR_WARNING) | curses.A_BOLD
+                elif line.startswith("═"):
+                    attr = self.color(COLOR_ACCENT) | curses.A_BOLD
+                elif line.strip().startswith("iptables") or line.strip().startswith("firewall-cmd"):
+                    attr = self.color(COLOR_DANGER) | curses.A_BOLD
+                elif "No high" in line:
+                    attr = self.color(COLOR_SUCCESS) | curses.A_BOLD
+                window.addnstr(2 + i, 2, line, box_width - 4, attr)
+
+            footer = "↑↓ scroll | s save to file | q close"
+            window.addnstr(box_height - 2, 2, footer, box_width - 4,
+                           self.color(COLOR_MUTED))
+            window.refresh()
+
+            key = window.getch()
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            elif key in (curses.KEY_UP, ord("k")):
+                scroll = max(0, scroll - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                scroll = min(max(0, len(lines) - view_height), scroll + 1)
+            elif key in (ord("s"), ord("S")):
+                ts = scan_history._timestamp()
+                safe_target = self.target.replace("/", "_").replace(":", "_")
+                filepath = os.path.join(
+                    scan_history.HISTORY_DIR,
+                    f"{ts}_{safe_target}_firewall_rules.txt",
+                )
+                try:
+                    firewall_rules.export_firewall_rules(self.results, filepath)
+                    self.status_message = f"Firewall rules saved: {os.path.basename(filepath)}"
+                except OSError as exc:
+                    self.status_message = f"Save failed: {exc}"
                 return
 
     def prompt_input(self, stdscr, label, current_value):

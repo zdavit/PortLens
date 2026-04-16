@@ -32,6 +32,7 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Structured logging** — all scan activity, timing, errors, and AI requests logged to `logs/scanner.log`
 - **Friendly error handling** — clear messages when nmap or Ollama are unavailable instead of crashes
 - **Localhost validation script** — automated testing of scan output against expected services
+- **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports (`g` key in dashboard, `--firewall` flag in CLI)
 - **Fully local** — no API keys or cloud services required
 
 ## Project Structure
@@ -42,6 +43,7 @@ src/
   network_map.py      # Host discovery (ping sweep) and OS-detection mapping
   interactive_cli.py  # Full-screen curses dashboard
   scan_history.py     # JSON/CSV export, history listing, scan diffing
+  firewall_rules.py   # iptables/firewalld rule generation for risky ports
   validate_localhost.py  # Automated validation script
 logs/                 # Debug/error logs (gitignored)
 scan_history/         # Saved scan results as JSON/CSV (gitignored)
@@ -96,6 +98,7 @@ Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover 
 | `o` | Toggle open-only / open+closed port view |
 | `w` | Toggle watch mode (auto-rescan every 60s) |
 | `x` | Export HTML security report |
+| `g` | Generate firewall rules for risky ports |
 | `a` | Toggle AI analysis on/off |
 | `↑/↓` | Navigate through detected services |
 | `←/→` | Scroll details pane |
