@@ -94,8 +94,11 @@ Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover 
 | `e` | Export current results to CSV |
 | `h` | Browse scan history and diff against current results |
 | `o` | Toggle open-only / open+closed port view |
+| `w` | Toggle watch mode (auto-rescan every 60s) |
+| `x` | Export HTML security report |
 | `a` | Toggle AI analysis on/off |
 | `↑/↓` | Navigate through detected services |
+| `←/→` | Scroll details pane |
 | `q` | Quit the dashboard |
 
 The dashboard keeps scans running in the background, shows live progress, lists open services in a color-coded table, and displays per-service details with a security score and AI-generated explanation for the currently selected port.

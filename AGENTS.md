@@ -60,7 +60,7 @@ The agent will be guided using the following feedback signals:
   - Identify realistic risks
   - Provide useful mitigation steps
 
-### 3. Code Quality Review
+### 4. Code Quality Review
 - Ask the agent to:
   - Refactor for clarity and modularity
   - Add comments and documentation

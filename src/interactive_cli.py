@@ -36,6 +36,7 @@ class DashboardApp:
         self.error_message = ""
         self.selected_index = 0
         self.scroll_offset = 0
+        self.detail_scroll = 0
         self.running = False
         self.spinner_index = 0
         self.worker = None
@@ -276,7 +277,10 @@ class DashboardApp:
             self.scroll_offset = 0
             return
 
-        self.selected_index = max(0, min(self.selected_index + delta, len(services) - 1))
+        new_index = max(0, min(self.selected_index + delta, len(services) - 1))
+        if new_index != self.selected_index:
+            self.detail_scroll = 0
+        self.selected_index = new_index
         self.ensure_selected_analysis()
 
     def cycle_spinner(self):
@@ -447,6 +451,10 @@ class DashboardApp:
                 self.move_selection(-1)
             elif key == curses.KEY_DOWN:
                 self.move_selection(1)
+            elif key == curses.KEY_RIGHT:
+                self.detail_scroll += 3
+            elif key == curses.KEY_LEFT:
+                self.detail_scroll = max(0, self.detail_scroll - 3)
 
     def show_help(self, stdscr):
         HELP_LINES = [
@@ -464,6 +472,7 @@ class DashboardApp:
             ("x", "Export HTML security report"),
             ("h", "Browse scan history / diff"),
             ("↑/↓", "Navigate services"),
+            ("←/→", "Scroll details pane"),
             ("q", "Quit"),
         ]
 
@@ -994,9 +1003,24 @@ class DashboardApp:
             "Actions:": self.color(COLOR_SUCCESS) | curses.A_BOLD,
         }
 
-        for row, line in enumerate(lines[:content_height]):
+        # Clamp detail_scroll to valid range
+        max_scroll = max(0, len(lines) - content_height)
+        self.detail_scroll = min(self.detail_scroll, max_scroll)
+        visible_lines = lines[self.detail_scroll:self.detail_scroll + content_height]
+
+        # Draw scroll indicators
+        if self.detail_scroll > 0:
+            stdscr.addnstr(start_y, start_x + box_width - 6, " ▲ ", 3,
+                           self.color(COLOR_MUTED))
+        if self.detail_scroll < max_scroll:
+            bottom_y = min(start_y + box_height - 1, stdscr.getmaxyx()[0] - 1)
+            stdscr.addnstr(bottom_y, start_x + box_width - 6, " ▼ ", 3,
+                           self.color(COLOR_MUTED))
+
+        for row, line in enumerate(visible_lines):
+            actual_index = self.detail_scroll + row
             attr = curses.A_NORMAL
-            if row == 0:
+            if actual_index == 0:
                 attr = self.color(COLOR_ACCENT) | curses.A_BOLD
             elif line == "AI Analysis":
                 attr = self.color(COLOR_AI) | curses.A_BOLD

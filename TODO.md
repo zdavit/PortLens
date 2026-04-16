@@ -29,3 +29,5 @@
 - [x] Sanitize service banners — strip control characters and ANSI escapes from nmap output
 - [x] Scan scheduling / watch mode — auto-rescan on interval, alert when ports open/close or risks change
 - [x] HTML report export — self-contained HTML security report with scores, port tables, and AI analysis
+- [x] Improved OS fingerprinting — `--osscan-guess` flag and OS-family aggregation for more accurate guesses
+- [x] Scrollable details pane — `←/→` arrow keys to scroll the details/AI analysis pane with ▲/▼ indicators

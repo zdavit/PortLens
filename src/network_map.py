@@ -10,6 +10,41 @@ except ImportError:
 
 logger = logging.getLogger("scanner")
 
+_OS_FAMILY_KEYWORDS = ["Linux", "Windows", "macOS", "FreeBSD", "OpenBSD", "NetBSD", "iOS", "Android"]
+
+
+def _best_os_guess(os_matches):
+    """Pick the best OS guess by aggregating matches into OS families.
+
+    If the top match has high confidence (>=90%), use it directly.
+    Otherwise, group matches by OS family and return the family with the
+    highest combined weight, along with the best specific match name.
+    """
+    best = os_matches[0]
+    best_acc = int(best.get("accuracy", 0))
+
+    if best_acc >= 90:
+        return f"{best.get('name', 'Unknown')} ({best_acc}%)"
+
+    family_scores = {}
+    family_best = {}
+    for match in os_matches:
+        name = match.get("name", "")
+        acc = int(match.get("accuracy", 0))
+        family = "Other"
+        for kw in _OS_FAMILY_KEYWORDS:
+            if kw.lower() in name.lower():
+                family = kw
+                break
+        family_scores[family] = family_scores.get(family, 0) + acc
+        if family not in family_best or acc > int(family_best[family].get("accuracy", 0)):
+            family_best[family] = match
+
+    top_family = max(family_scores, key=family_scores.get)
+    top_match = family_best[top_family]
+    top_acc = int(top_match.get("accuracy", 0))
+    return f"{top_match.get('name', 'Unknown')} ({top_acc}%)"
+
 
 def discover_hosts(target, announce=True, progress_callback=None):
     """Run a fast ping sweep to find live hosts on a subnet."""
@@ -64,7 +99,7 @@ def scan_network_map(target, progress_callback=None):
 
     try:
         nm = nmap.PortScanner()
-        nm.scan(hosts=live_ips, arguments="-O -T4 -n --top-ports 100 --max-os-tries 1")
+        nm.scan(hosts=live_ips, arguments="-O --osscan-guess -T4 -n --top-ports 100")
     except (nmap.PortScannerError, OSError) as exc:
         logger.error("Network map scan failed: %s", exc, exc_info=True)
         raise scanner.ScannerError(f"Network map scan failed: {exc}") from exc
@@ -78,8 +113,7 @@ def scan_network_map(target, progress_callback=None):
         try:
             os_matches = nm[host].get("osmatch", [])
             if os_matches:
-                best = os_matches[0]
-                os_guess = f"{best.get('name', 'Unknown')} ({best.get('accuracy', '?')}%)"
+                os_guess = _best_os_guess(os_matches)
         except (KeyError, IndexError):
             pass
 
