@@ -33,6 +33,7 @@ except ImportError:
 
 
 SCAN_CHUNK_SIZE = 4096
+SCAN_PARALLEL_CHUNKS = 4
 DEFAULT_PORT_RANGE = "1-1024"
 INTERACTIVE_DEFAULT_TARGET = "localhost"
 INTERACTIVE_DEFAULT_PORT_RANGE = "1-100"
@@ -601,20 +602,57 @@ def _nmap_scan_args(scan_mode, chunk_spec):
         return f"-sV --version-intensity 0 -T4 -n -p {chunk_spec}"
 
 
-def _merge_host_info(combined, host_info):
-    if host_info["host"] not in combined:
-        combined[host_info["host"]] = {
-            "host": host_info["host"],
-            "hostname": host_info["hostname"],
-            "state": host_info["state"],
-            "services": [],
-            "ports": [],
-        }
-    entry = combined[host_info["host"]]
-    entry["ports"].extend(host_info["ports"])
-    entry["services"].extend(host_info["services"])
-    if host_info.get("hostname"):
-        entry["hostname"] = host_info["hostname"]
+def _merge_host_info(combined, host_info, lock=None):
+    if lock:
+        lock.acquire()
+    try:
+        if host_info["host"] not in combined:
+            combined[host_info["host"]] = {
+                "host": host_info["host"],
+                "hostname": host_info["hostname"],
+                "state": host_info["state"],
+                "services": [],
+                "ports": [],
+            }
+        entry = combined[host_info["host"]]
+        entry["ports"].extend(host_info["ports"])
+        entry["services"].extend(host_info["services"])
+        if host_info.get("hostname"):
+            entry["hostname"] = host_info["hostname"]
+    finally:
+        if lock:
+            lock.release()
+
+
+def _parse_nmap_host(nm, host):
+    """Extract host info and port records from an nmap scan result."""
+    host_info = {
+        "host": host,
+        "hostname": nm[host].hostname(),
+        "state": nm[host].state(),
+        "services": [],
+        "ports": [],
+    }
+    for proto in nm[host].all_protocols():
+        ports_list = sorted(nm[host][proto].keys())
+        for port in ports_list:
+            info = nm[host][proto][port]
+            service_name = sanitize_banner(info.get("name", "unknown"))
+            product = sanitize_banner(info.get("product", ""))
+            version = sanitize_banner(info.get("version", ""))
+            port_record = {
+                "port": port,
+                "protocol": proto,
+                "state": info.get("state", "unknown"),
+                "service": service_name,
+                "product": product,
+                "version": version,
+                "risk": classify_risk(service_name, product, version),
+            }
+            host_info["ports"].append(port_record)
+            if port_record["state"] == "open":
+                host_info["services"].append(port_record.copy())
+    return host_info
 
 
 def _is_subnet_target(target):
@@ -656,14 +694,18 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
 
     combined = {}
     total_work = len(scan_targets) * len(chunks)
-    completed_work = 0
     scan_start = time.time()
 
-    for host_target in scan_targets:
-        for chunk_index, chunk_spec in enumerate(chunks):
-            chunk_count = count_ports_in_spec(chunk_spec)
-            logger.info("Scanning host %s chunk %d/%d: ports %s", host_target, chunk_index + 1, len(chunks), chunk_spec)
+    use_parallel = len(chunks) > 1 and SCAN_PARALLEL_CHUNKS > 1
+    if use_parallel:
+        import concurrent.futures
+        import threading
 
+        lock = threading.Lock()
+        completed_work = [0]  # mutable counter for threads
+
+        def _scan_chunk(host_target, chunk_index, chunk_spec):
+            logger.info("Scanning host %s chunk %d/%d: ports %s", host_target, chunk_index + 1, len(chunks), chunk_spec)
             try:
                 nm = nmap.PortScanner()
                 nm.scan(hosts=host_target, arguments=_nmap_scan_args(scan_mode, chunk_spec))
@@ -672,37 +714,47 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
                 raise ScannerError(f"nmap failed while scanning {host_target}: {exc}") from exc
 
             for host in nm.all_hosts():
-                host_info = {
-                    "host": host,
-                    "hostname": nm[host].hostname(),
-                    "state": nm[host].state(),
-                    "services": [],
-                    "ports": [],
-                }
-                for proto in nm[host].all_protocols():
-                    ports_list = sorted(nm[host][proto].keys())
-                    for port in ports_list:
-                        info = nm[host][proto][port]
-                        service_name = sanitize_banner(info.get("name", "unknown"))
-                        product = sanitize_banner(info.get("product", ""))
-                        version = sanitize_banner(info.get("version", ""))
-                        port_record = {
-                            "port": port,
-                            "protocol": proto,
-                            "state": info.get("state", "unknown"),
-                            "service": service_name,
-                            "product": product,
-                            "version": version,
-                            "risk": classify_risk(service_name, product, version),
-                        }
-                        host_info["ports"].append(port_record)
-                        if port_record["state"] == "open":
-                            host_info["services"].append(port_record.copy())
-                _merge_host_info(combined, host_info)
+                host_info = _parse_nmap_host(nm, host)
+                _merge_host_info(combined, host_info, lock=lock)
 
-            completed_work += 1
-            if progress_callback:
-                progress_callback(completed_work, total_work)
+            with lock:
+                completed_work[0] += 1
+                if progress_callback:
+                    progress_callback(completed_work[0], total_work)
+
+        workers = min(SCAN_PARALLEL_CHUNKS, len(chunks))
+        logger.info("Scanning with %d parallel workers", workers)
+        if progress_callback:
+            progress_callback(0, total_work, f"Scanning with {workers} parallel workers...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = []
+            for host_target in scan_targets:
+                for chunk_index, chunk_spec in enumerate(chunks):
+                    futures.append(pool.submit(_scan_chunk, host_target, chunk_index, chunk_spec))
+
+            for future in concurrent.futures.as_completed(futures):
+                future.result()  # re-raises any ScannerError
+    else:
+        completed_work = 0
+        for host_target in scan_targets:
+            for chunk_index, chunk_spec in enumerate(chunks):
+                logger.info("Scanning host %s chunk %d/%d: ports %s", host_target, chunk_index + 1, len(chunks), chunk_spec)
+
+                try:
+                    nm = nmap.PortScanner()
+                    nm.scan(hosts=host_target, arguments=_nmap_scan_args(scan_mode, chunk_spec))
+                except (nmap.PortScannerError, OSError) as exc:
+                    logger.error("nmap scan failed on %s chunk %s: %s", host_target, chunk_spec, exc, exc_info=True)
+                    raise ScannerError(f"nmap failed while scanning {host_target}: {exc}") from exc
+
+                for host in nm.all_hosts():
+                    host_info = _parse_nmap_host(nm, host)
+                    _merge_host_info(combined, host_info)
+
+                completed_work += 1
+                if progress_callback:
+                    progress_callback(completed_work, total_work)
 
     scan_elapsed = time.time() - scan_start
     logger.info("nmap scan finished in %.1f seconds", scan_elapsed)
