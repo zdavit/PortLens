@@ -125,6 +125,21 @@ def list_history():
     return entries
 
 
+MAX_SCAN_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
+_REQUIRED_SCAN_KEYS = {"timestamp", "target", "ports", "hosts"}
+
+
+def _validate_scan_schema(data):
+    """Check that a loaded scan record has the expected structure."""
+    if not isinstance(data, dict):
+        raise ValueError("Scan file does not contain a JSON object.")
+    missing = _REQUIRED_SCAN_KEYS - data.keys()
+    if missing:
+        raise ValueError(f"Scan file missing required keys: {', '.join(sorted(missing))}")
+    if not isinstance(data["hosts"], list):
+        raise ValueError("'hosts' must be a list.")
+
+
 def load_scan(filepath):
     """Load a scan JSON file. Only allows files inside HISTORY_DIR."""
     real_path = os.path.realpath(filepath)
@@ -134,8 +149,15 @@ def load_scan(filepath):
             f"Access denied: scan files must be inside {HISTORY_DIR}/. "
             f"Got: {filepath}"
         )
+    file_size = os.path.getsize(real_path)
+    if file_size > MAX_SCAN_FILE_BYTES:
+        raise OSError(
+            f"Scan file too large ({file_size} bytes, max {MAX_SCAN_FILE_BYTES})."
+        )
     with open(real_path) as f:
-        return json.load(f)
+        data = json.load(f)
+    _validate_scan_schema(data)
+    return data
 
 
 # ---------------------------------------------------------------------------

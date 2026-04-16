@@ -41,6 +41,7 @@ MAX_PORT_NUMBER = 65535
 MAX_PORTS_PER_SCAN = 65535
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2"
+AI_MAX_RESPONSE_BYTES = 1024 * 1024  # 1 MB
 RISK_COLORS = {
     "Critical": "\033[91m",
     "High": "\033[93m",
@@ -558,7 +559,11 @@ def request_ai_response(prompt, announce_message=None):
         ai_start = time.time()
         logger.debug("Sending AI request to %s", OLLAMA_API_URL)
         with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
+            raw = resp.read(AI_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > AI_MAX_RESPONSE_BYTES:
+                logger.warning("AI response exceeded %d bytes, truncated", AI_MAX_RESPONSE_BYTES)
+                raw = raw[:AI_MAX_RESPONSE_BYTES]
+            data = json.loads(raw)
         logger.debug("AI response received in %.1f seconds", time.time() - ai_start)
     except urllib.error.URLError as exc:
         logger.error("AI request failed (URL error): %s", exc)

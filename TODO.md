@@ -1,20 +1,7 @@
 # TODO
 
-## High Priority
-
-- [x] **Secure file creation** — use atomic file writes with restrictive permissions from the start instead of chmod after write; harden log directory permissions; add permission hardening to `firewall_rules.py` exports
-- [x] **CSV formula injection** — sanitize service names, banners, and other network-sourced fields in CSV export to prevent spreadsheet formula execution (`=`, `+`, `-`, `@` prefixes)
-
-## Medium Priority
-
-- [x] **Sanitize AI output** — strip control characters and ANSI escapes from Ollama responses before displaying in the terminal/TUI
-- [x] **Firewall rule shell safety** — sanitize service names interpolated into generated shell commands to prevent quote/metacharacter injection when users copy-paste
-- [x] **Validate interactive target immediately** — run `validate_target()` on user input before storing in `self.target` instead of waiting until scan time
-
 ## Low Priority
 
-- [ ] **Cap AI response size** — limit the bytes read from Ollama `urlopen` to prevent unbounded memory usage
-- [ ] **Validate history JSON schema** — check that loaded scan history files have the expected structure (`timestamp`, `target`, `ports`, `hosts`) before using them
 - [ ] **Web interface** — Flask/FastAPI frontend with a browser-based dashboard instead of just the curses CLI
 
 ## Completed
@@ -44,3 +31,10 @@
 - [x] Scrollable details pane — `←/→` arrow keys to scroll the details/AI analysis pane with ▲/▼ indicators
 - [x] Pin dependencies — lock `python-nmap` to an exact version in `requirements.txt` and run `pip-audit`
 - [x] Firewall rule suggestions — generate `iptables`/`firewalld` rules to close unnecessary open ports
+- [x] Secure file creation — atomic file writes with `0o600` permissions via `os.open()`; hardened log directory
+- [x] CSV formula injection — sanitize network-sourced fields in CSV export to prevent spreadsheet formula execution
+- [x] Sanitize AI output — strip control characters and ANSI escapes from Ollama responses
+- [x] Firewall rule shell safety — whitelist-based sanitization for service names in generated shell commands
+- [x] Validate interactive target immediately — run `validate_target()` on input instead of deferring to scan time
+- [x] Cap AI response size — limit reads from Ollama to 1 MB to prevent unbounded memory usage
+- [x] Validate history JSON schema — check required keys (`timestamp`, `target`, `ports`, `hosts`) and file size on load
