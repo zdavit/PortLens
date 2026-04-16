@@ -20,7 +20,7 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Two-phase scanning** — automatic ping sweep discovers live hosts first, then only port-scans those hosts (dramatically faster on subnets)
 - **Security score summary** — per-host 0-100 security score based on the number and severity of open services, shown in the detail pane
 - **Target input validation** — rejects shell characters, nmap option injection, and overly broad subnets before scanning
-- **Full port scanning** — scan any range up to all 65535 ports with chunked, parallelized nmap (`-T4`, `-sV`)
+- **Full port scanning** — scan any range up to all 65535 ports with parallel chunked nmap (8 concurrent workers, `-T4`, `--min-rate 300`, `-sV`)
 - **70+ service risk classifications** — covers remote access, web, databases, file sharing, printing, DNS, RPC, containers, and more
 - **Version-aware risk overrides** — outdated software (e.g., OpenSSH < 8.0, MySQL < 8.0, PostgreSQL < 13) is automatically escalated to a higher risk level
 - **AI-powered security analysis** — per-service explanations with Overview, What is this, Risks, and Actions sections powered by Ollama + llama3.2
@@ -29,10 +29,12 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Scan history** — every scan auto-saves to `scan_history/` as JSON for future reference
 - **CSV/JSON export** — export results on demand for external analysis or reporting
 - **Scan diffing** — compare current results against any previous scan to see new/closed ports and risk changes
-- **Structured logging** — all scan activity, timing, errors, and AI requests logged to `logs/scanner.log`
+- **Structured logging** — all scan activity, timing, errors, and AI requests logged to `logs/`
 - **Friendly error handling** — clear messages when nmap or Ollama are unavailable instead of crashes
 - **Localhost validation script** — automated testing of scan output against expected services
 - **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports (`g` key in dashboard, `--firewall` flag in CLI)
+- **HTML report export** — self-contained HTML security report with scores, port tables, and AI analysis (`x` key in dashboard)
+- **Security hardening** — atomic file creation with `0o600` permissions, CSV formula injection prevention, AI output sanitization, shell-safe firewall rule generation, scan history schema validation
 - **Fully local** — no API keys or cloud services required
 
 ## Project Structure
@@ -93,13 +95,13 @@ Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover 
 | `d` | Reset target to auto-detected local subnet |
 | `u` | Cycle scan mode (TCP / UDP / Both) |
 | `m` | Network map — discover hosts with OS detection (requires root) |
-| `e` | Export current results to CSV |
-| `h` | Browse scan history and diff against current results |
-| `o` | Toggle open-only / open+closed port view |
 | `w` | Toggle watch mode (auto-rescan every 60s) |
-| `x` | Export HTML security report |
 | `g` | Generate firewall rules for risky ports |
+| `o` | Toggle open-only / open+closed port view |
 | `a` | Toggle AI analysis on/off |
+| `e` | Export current results to CSV |
+| `x` | Export HTML security report |
+| `h` | Browse scan history and diff against current results |
 | `↑/↓` | Navigate through detected services |
 | `←/→` | Scroll details pane |
 | `q` | Quit the dashboard |
@@ -137,16 +139,16 @@ python3 src/validate_localhost.py -p 1-100 --expect 22:ssh --expect 80:http --ch
 ## Example Output
 
 ```
-🔍 Scanning localhost (ports 1-100)...
+🔍 Scanning localhost (ports 1-100, TCP)...
 
 ============================================================
   Host: 127.0.0.1 (localhost)
   State: up
 ============================================================
-  Port     Service         Product              Risk
-  -----------------------------------------------------
-  22       ssh             OpenSSH 10.0         Medium
-  80       http            Caddy httpd          Low
+  Port       Service         Product              Risk
+  -------------------------------------------------------
+  22/tcp     ssh             OpenSSH 10.0         Medium
+  80/tcp     http            Caddy httpd          Low
 
 💾 Scan saved to scan_history/2026-04-13_15-47-42_localhost.json
 
