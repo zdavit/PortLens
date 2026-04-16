@@ -258,6 +258,7 @@ def ensure_nmap_available():
 
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_CONTROL_CHAR_KEEP_NL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 MAX_BANNER_LEN = 200
 
@@ -272,11 +273,11 @@ def sanitize_banner(text):
 
 
 def sanitize_text(text):
-    """Strip control characters and ANSI escapes from arbitrary text (no truncation)."""
+    """Strip control characters and ANSI escapes, preserving newlines and tabs."""
     if not text:
         return text
     text = _ANSI_ESCAPE_RE.sub("", text)
-    text = _CONTROL_CHAR_RE.sub("", text)
+    text = _CONTROL_CHAR_KEEP_NL_RE.sub("", text)
     return text
 
 
