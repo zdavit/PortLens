@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import html
 import json
@@ -17,12 +18,23 @@ def _timestamp():
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
-def _secure_file(filepath):
-    """Set file permissions to owner-only read/write (0600)."""
-    try:
-        os.chmod(filepath, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+@contextlib.contextmanager
+def _secure_open(filepath, mode="w", **kwargs):
+    """Open a file for writing with owner-only permissions from the start."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(filepath, flags, 0o600)
+    with os.fdopen(fd, mode, **kwargs) as f:
+        yield f
+
+
+def _csv_safe(value):
+    """Escape values that could be interpreted as spreadsheet formulas."""
+    s = str(value)
+    if s and s[0] in ("=", "+", "-", "@"):
+        return "'" + s
+    return s
 
 
 def _scan_filename(target, timestamp, ext):
@@ -45,9 +57,8 @@ def export_json(results, target, ports, filepath=None):
         "ports": ports,
         "hosts": results,
     }
-    with open(filepath, "w") as f:
+    with _secure_open(filepath) as f:
         json.dump(record, f, indent=2)
-    _secure_file(filepath)
 
     logger.info("Exported JSON scan to %s", filepath)
     return filepath
@@ -61,7 +72,7 @@ def export_csv(results, target, ports, filepath=None):
     fieldnames = ["timestamp", "target", "host", "hostname", "port", "protocol", "state",
                   "service", "product", "version", "risk"]
 
-    with open(filepath, "w", newline="") as f:
+    with _secure_open(filepath, newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for host_info in results:
@@ -70,17 +81,15 @@ def export_csv(results, target, ports, filepath=None):
                     "timestamp": ts,
                     "target": target,
                     "host": host_info["host"],
-                    "hostname": host_info.get("hostname", ""),
+                    "hostname": _csv_safe(host_info.get("hostname", "")),
                     "port": port_rec["port"],
                     "protocol": port_rec.get("protocol", "tcp"),
                     "state": port_rec.get("state", "open"),
-                    "service": port_rec["service"],
-                    "product": port_rec.get("product", ""),
-                    "version": port_rec.get("version", ""),
+                    "service": _csv_safe(port_rec["service"]),
+                    "product": _csv_safe(port_rec.get("product", "")),
+                    "version": _csv_safe(port_rec.get("version", "")),
                     "risk": port_rec.get("risk", "Unknown"),
                 })
-
-    _secure_file(filepath)
     logger.info("Exported CSV scan to %s", filepath)
     return filepath
 
@@ -308,8 +317,7 @@ tr:hover {{ background: #16213e; }}
 {body}
 </body></html>"""
 
-    with open(filepath, "w") as f:
+    with _secure_open(filepath) as f:
         f.write(report)
-    _secure_file(filepath)
     logger.info("Exported HTML report to %s", filepath)
     return filepath

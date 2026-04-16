@@ -15,7 +15,7 @@ from datetime import datetime
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(LOG_DIR, mode=0o700, exist_ok=True)
 
 _log_filename = datetime.now().strftime("scan_%Y-%m-%d_%H-%M-%S.log")
 logging.basicConfig(

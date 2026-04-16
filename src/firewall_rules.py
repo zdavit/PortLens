@@ -139,8 +139,9 @@ def generate_rules_text(results):
 
 def export_firewall_rules(results, filepath):
     """Write firewall rules to a file."""
+    from scan_history import _secure_open
     text = generate_rules_text(results)
-    with open(filepath, "w") as f:
+    with _secure_open(filepath) as f:
         f.write(text)
     logger.info("Exported firewall rules to %s", filepath)
     return filepath

@@ -2,8 +2,8 @@
 
 ## High Priority
 
-- [ ] **Secure file creation** — use atomic file writes with restrictive permissions from the start instead of chmod after write; harden log directory permissions; add permission hardening to `firewall_rules.py` exports
-- [ ] **CSV formula injection** — sanitize service names, banners, and other network-sourced fields in CSV export to prevent spreadsheet formula execution (`=`, `+`, `-`, `@` prefixes)
+- [x] **Secure file creation** — use atomic file writes with restrictive permissions from the start instead of chmod after write; harden log directory permissions; add permission hardening to `firewall_rules.py` exports
+- [x] **CSV formula injection** — sanitize service names, banners, and other network-sourced fields in CSV export to prevent spreadsheet formula execution (`=`, `+`, `-`, `@` prefixes)
 
 ## Medium Priority
 
