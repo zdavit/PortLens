@@ -626,7 +626,7 @@ class DashboardApp:
                     diff = scan_history.diff_scans(old_scan["hosts"], self.results)
                     self.status_message = scan_history.format_diff(diff).split("\n")[0]
                     self._last_diff = scan_history.format_diff(diff)
-                except (OSError, KeyError) as exc:
+                except (OSError, ValueError, KeyError) as exc:
                     self.status_message = f"Diff failed: {exc}"
                 return
 

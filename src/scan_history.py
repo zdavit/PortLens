@@ -164,12 +164,21 @@ def load_scan(filepath):
 # Diff
 # ---------------------------------------------------------------------------
 
+def _service_key(host, service):
+    return (
+        host,
+        service["port"],
+        service.get("protocol", "tcp"),
+        service["service"],
+    )
+
+
 def _service_set(results):
     services = set()
     for host_info in results:
         host = host_info["host"]
         for svc in host_info.get("services", []):
-            services.add((host, svc["port"], svc["service"]))
+            services.add(_service_key(host, svc))
     return services
 
 
@@ -178,7 +187,7 @@ def _port_risk_map(results):
     for host_info in results:
         host = host_info["host"]
         for svc in host_info.get("services", []):
-            mapping[(host, svc["port"], svc["service"])] = svc.get("risk", "Unknown")
+            mapping[_service_key(host, svc)] = svc.get("risk", "Unknown")
     return mapping
 
 
@@ -200,12 +209,24 @@ def diff_scans(old_results, new_results):
             risk_changes.append((key, old_risk, new_risk))
 
     return {
-        "opened": [{"host": h, "port": p, "service": s} for h, p, s in opened],
-        "closed": [{"host": h, "port": p, "service": s} for h, p, s in closed],
+        "opened": [
+            {"host": h, "port": p, "protocol": proto, "service": s}
+            for h, p, proto, s in opened
+        ],
+        "closed": [
+            {"host": h, "port": p, "protocol": proto, "service": s}
+            for h, p, proto, s in closed
+        ],
         "unchanged": len(unchanged),
         "risk_changes": [
-            {"host": k[0], "port": k[1], "service": k[2],
-             "old_risk": old_r, "new_risk": new_r}
+            {
+                "host": k[0],
+                "port": k[1],
+                "protocol": k[2],
+                "service": k[3],
+                "old_risk": old_r,
+                "new_risk": new_r,
+            }
             for k, old_r, new_r in risk_changes
         ],
     }
@@ -216,16 +237,20 @@ def format_diff(diff):
     if diff["opened"]:
         lines.append("NEW open services:")
         for s in diff["opened"]:
-            lines.append(f"  + {s['host']}:{s['port']} ({s['service']})")
+            lines.append(
+                f"  + {s['host']}:{s['port']}/{s.get('protocol', 'tcp')} ({s['service']})"
+            )
     if diff["closed"]:
         lines.append("CLOSED since last scan:")
         for s in diff["closed"]:
-            lines.append(f"  - {s['host']}:{s['port']} ({s['service']})")
+            lines.append(
+                f"  - {s['host']}:{s['port']}/{s.get('protocol', 'tcp')} ({s['service']})"
+            )
     if diff["risk_changes"]:
         lines.append("Risk level changes:")
         for rc in diff["risk_changes"]:
             lines.append(
-                f"  ~ {rc['host']}:{rc['port']} ({rc['service']}): "
+                f"  ~ {rc['host']}:{rc['port']}/{rc.get('protocol', 'tcp')} ({rc['service']}): "
                 f"{rc['old_risk']} -> {rc['new_risk']}"
             )
     lines.append(f"Unchanged services: {diff['unchanged']}")

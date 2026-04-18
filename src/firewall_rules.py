@@ -1,6 +1,8 @@
 """Generate iptables and firewalld rules to close unnecessary open ports."""
 
+import contextlib
 import logging
+import socket
 
 logger = logging.getLogger("scanner")
 
@@ -32,6 +34,56 @@ def _should_block(service):
     return False
 
 
+def _local_host_aliases():
+    aliases = {"localhost", "127.0.0.1", "::1"}
+
+    for name in ("localhost", socket.gethostname(), socket.getfqdn()):
+        if not name:
+            continue
+        aliases.add(name)
+        with contextlib.suppress(socket.gaierror):
+            for _, _, _, _, sockaddr in socket.getaddrinfo(name, None):
+                if sockaddr:
+                    aliases.add(sockaddr[0])
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        with contextlib.suppress(OSError):
+            sock.connect(("8.8.8.8", 80))
+            aliases.add(sock.getsockname()[0])
+    finally:
+        sock.close()
+
+    return aliases
+
+
+def _remote_scan_warning(results):
+    if not results:
+        return None
+
+    local_aliases = _local_host_aliases()
+    remote_hosts = sorted(
+        {
+            host_info["host"]
+            for host_info in results
+            if host_info.get("host") not in local_aliases
+        }
+    )
+    if not remote_hosts:
+        return None
+
+    preview = ", ".join(remote_hosts[:3])
+    if len(remote_hosts) > 3:
+        preview += f", +{len(remote_hosts) - 3} more"
+
+    logger.warning("Refusing firewall rule generation for remote hosts: %s", preview)
+    return (
+        "Firewall suggestions are only safe for scans of this machine. "
+        f"Current results include remote host(s): {preview}. "
+        "Scan localhost or this machine's IP directly before generating firewall rules."
+    )
+
+
 def collect_blockable_services(results):
     """Return a sorted list of open services that should be blocked."""
     blockable = []
@@ -53,6 +105,9 @@ def collect_blockable_services(results):
 
 def generate_iptables_rules(results):
     """Generate iptables DROP rules for high/critical-risk open ports."""
+    if _remote_scan_warning(results):
+        return None
+
     services = collect_blockable_services(results)
     if not services:
         return None
@@ -81,6 +136,9 @@ def generate_iptables_rules(results):
 
 def generate_firewalld_rules(results):
     """Generate firewalld commands to block high/critical-risk open ports."""
+    if _remote_scan_warning(results):
+        return None
+
     services = collect_blockable_services(results)
     if not services:
         return None
@@ -111,6 +169,10 @@ def generate_firewalld_rules(results):
 
 def generate_rules_text(results):
     """Return a combined text block with both iptables and firewalld rules."""
+    warning = _remote_scan_warning(results)
+    if warning:
+        return warning
+
     services = collect_blockable_services(results)
     if not services:
         return "No high or critical-risk services found — no firewall rules needed."

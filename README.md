@@ -28,11 +28,11 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Port range presets** — quick menu with common ranges (1-100, 1-1024, 1-10000, all ports, common services) plus custom input
 - **Scan history** — every scan auto-saves to `scan_history/` as JSON for future reference
 - **CSV/JSON export** — export results on demand for external analysis or reporting
-- **Scan diffing** — compare current results against any previous scan to see new/closed ports and risk changes
+- **Scan diffing** — compare current results against any previous scan to see new/closed TCP vs UDP services and risk changes
 - **Structured logging** — all scan activity, timing, errors, and AI requests logged to `logs/`
 - **Friendly error handling** — clear messages when nmap or Ollama are unavailable instead of crashes
 - **Localhost validation script** — automated testing of scan output against expected services
-- **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports (`g` key in dashboard, `--firewall` flag in CLI)
+- **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports for this machine only (`g` key in dashboard, `--firewall` flag in CLI)
 - **HTML report export** — self-contained HTML security report with scores, port tables, and AI analysis (`x` key in dashboard)
 - **Security hardening** — atomic file creation with `0o600` permissions, CSV formula injection prevention, AI output sanitization, shell-safe firewall rule generation, scan history schema validation
 - **Fully local** — no API keys or cloud services required

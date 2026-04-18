@@ -994,7 +994,7 @@ def main():
         if args.diff:
             try:
                 old_scan = scan_history.load_scan(args.diff)
-            except (OSError, json.JSONDecodeError) as exc:
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
                 print(f"\n⚠️  Could not load previous scan: {exc}")
             else:
                 diff = scan_history.diff_scans(old_scan["hosts"], results)
