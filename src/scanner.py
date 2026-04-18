@@ -7,11 +7,26 @@ import re
 import shutil
 import socket
 import time
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 
+from ai_client import (
+    AI_MAX_RESPONSE_BYTES,
+    AIAnalysisError,
+    OLLAMA_API_URL,
+    OLLAMA_MODEL,
+    get_ai_analysis,
+    get_service_ai_analysis,
+    request_ai_response,
+)
 from datetime import datetime
+from risk_model import (
+    RISK_LEVELS,
+    classify_risk,
+    compute_host_score,
+    highest_risk_level,
+    host_exposure_summary,
+    score_label,
+)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
@@ -40,9 +55,6 @@ INTERACTIVE_DEFAULT_PORT_RANGE = "1-100"
 CLOSED_PORT_DISPLAY_LIMIT = 12
 MAX_PORT_NUMBER = 65535
 MAX_PORTS_PER_SCAN = 65535
-OLLAMA_API_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "llama3.2"
-AI_MAX_RESPONSE_BYTES = 1024 * 1024  # 1 MB
 RISK_COLORS = {
     "Critical": "\033[91m",
     "High": "\033[93m",
@@ -50,173 +62,6 @@ RISK_COLORS = {
     "Low": "\033[92m",
     "Unknown": "\033[90m",
 }
-
-RISK_LEVELS = {
-    # Remote access
-    "ssh": "Medium",
-    "telnet": "Critical",
-    "rdp": "High",
-    "ms-wbt-server": "High",
-    "vnc": "High",
-    "x11": "High",
-    # Web
-    "http": "Low",
-    "https": "Low",
-    "http-proxy": "Medium",
-    "http-alt": "Low",
-    # File transfer
-    "ftp": "High",
-    "ftp-data": "High",
-    "tftp": "High",
-    "nfs": "High",
-    # Email
-    "smtp": "Medium",
-    "pop3": "High",
-    "imap": "High",
-    "submission": "Medium",
-    # DNS / name resolution
-    "dns": "Medium",
-    "domain": "Medium",
-    "llmnr": "Low",
-    "mdns": "Low",
-    "netbios-ns": "Medium",
-    "netbios-ssn": "Medium",
-    # Databases
-    "mysql": "High",
-    "postgresql": "High",
-    "mongodb": "Critical",
-    "redis": "Critical",
-    "memcached": "Critical",
-    "elasticsearch": "High",
-    "couchdb": "High",
-    "ms-sql-s": "High",
-    "oracle": "High",
-    # File sharing / SMB
-    "smb": "High",
-    "microsoft-ds": "High",
-    # Directory / auth
-    "ldap": "High",
-    "kerberos": "Medium",
-    "kerberos-sec": "Medium",
-    # Printing
-    "ipp": "Low",
-    "printer": "Low",
-    "cups": "Low",
-    # Proxy / tunnel
-    "socks": "High",
-    "pptp": "High",
-    # Container / orchestration
-    "docker": "Critical",
-    # Messaging / IoT
-    "mqtt": "High",
-    "amqp": "Medium",
-    "sip": "Medium",
-    # RPC / system
-    "rpcbind": "Medium",
-    "sunrpc": "Medium",
-    "msrpc": "Medium",
-    "ajp13": "High",
-    "snmp": "High",
-    # Wrapped / unidentified
-    "tcpwrapped": "Medium",
-    "unknown": "Medium",
-    # UDP-specific services
-    "dhcps": "Medium",
-    "dhcpc": "Medium",
-    "tftp": "High",
-    "ntp": "Low",
-    "snmp": "High",
-    "syslog": "Medium",
-    "openvpn": "Medium",
-    "isakmp": "Medium",
-    "l2tp": "Medium",
-    "radius": "Medium",
-    "upnp": "High",
-    "ssdp": "High",
-    "nbdgram": "Medium",
-    "nbns": "Medium",
-}
-
-VERSION_RISK_OVERRIDES = {
-    "ssh": [
-        (lambda v: _version_lt(v, "8.0"), "High", "OpenSSH < 8.0 has known vulnerabilities"),
-    ],
-    "http": [
-        (lambda v: "apache" in v.lower() and _version_lt(v, "2.4"), "High",
-         "Apache < 2.4 is end-of-life"),
-    ],
-    "ftp": [
-        (lambda v: "vsftpd" in v.lower() and _version_lt(v, "3.0"), "Critical",
-         "vsftpd < 3.0 has known backdoor vulnerabilities"),
-    ],
-    "mysql": [
-        (lambda v: _version_lt(v, "8.0"), "Critical",
-         "MySQL < 8.0 lacks modern security defaults"),
-    ],
-    "postgresql": [
-        (lambda v: _version_lt(v, "13"), "Critical",
-         "PostgreSQL < 13 is past end-of-life"),
-    ],
-}
-
-
-def _version_lt(version_string, threshold):
-    import re
-    nums = re.findall(r"\d+", version_string)
-    thresh_nums = re.findall(r"\d+", threshold)
-    if not nums:
-        return False
-    try:
-        return [int(n) for n in nums[:3]] < [int(n) for n in thresh_nums[:3]]
-    except ValueError:
-        return False
-
-
-def classify_risk(service_name, product="", version=""):
-    if not service_name or service_name in ("", "unknown"):
-        return "Medium"
-
-    base_risk = RISK_LEVELS.get(service_name, "Unknown")
-    full_version = f"{product} {version}".strip()
-
-    overrides = VERSION_RISK_OVERRIDES.get(service_name, [])
-    for check_fn, override_risk, reason in overrides:
-        if full_version and check_fn(full_version):
-            logger.debug(
-                "Risk override for %s (%s): %s -> %s (%s)",
-                service_name, full_version, base_risk, override_risk, reason,
-            )
-            return override_risk
-
-    return base_risk
-
-RISK_PENALTIES = {
-    "Critical": 25,
-    "High": 15,
-    "Medium": 8,
-    "Low": 3,
-    "Unknown": 5,
-}
-
-
-def compute_host_score(host_info):
-    """Return a 0-100 security score for a host. 100 = no open services."""
-    penalty = 0
-    for svc in host_info.get("services", []):
-        penalty += RISK_PENALTIES.get(svc.get("risk", "Unknown"), 5)
-    return max(0, 100 - penalty)
-
-
-def score_label(score):
-    if score >= 90:
-        return "Excellent"
-    if score >= 70:
-        return "Good"
-    if score >= 50:
-        return "Fair"
-    if score >= 30:
-        return "Poor"
-    return "Critical"
 
 
 COMMON_EDUCATIONAL_PORTS = [
@@ -239,10 +84,6 @@ COMMON_EDUCATIONAL_PORTS = [
 
 class ScannerError(Exception):
     """Raised when the scanner cannot complete a scan."""
-
-
-class AIAnalysisError(Exception):
-    """Raised when the AI analysis step fails."""
 
 
 def ensure_nmap_available():
@@ -303,8 +144,11 @@ def validate_target(target):
     try:
         if "/" in target:
             net = ipaddress.ip_network(target, strict=False)
-            if net.prefixlen < 16:
-                raise ScannerError("Subnet too large: minimum prefix length is /16.")
+            min_prefix = 64 if net.version == 6 else 16
+            if net.prefixlen < min_prefix:
+                raise ScannerError(
+                    f"Subnet too large: minimum prefix length is /{min_prefix} for IPv{net.version}."
+                )
             return str(net)
         else:
             ipaddress.ip_address(target)
@@ -320,24 +164,48 @@ def validate_target(target):
 
 
 def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for family, endpoint in (
+        (socket.AF_INET, ("8.8.8.8", 80)),
+        (socket.AF_INET6, ("2001:4860:4860::8888", 80)),
+    ):
+        try:
+            s = socket.socket(family, socket.SOCK_DGRAM)
+        except OSError:
+            continue
+        try:
+            s.connect(endpoint)
+            local_ip = s.getsockname()[0]
+            if local_ip:
+                return local_ip
+        except OSError:
+            pass
+        finally:
+            s.close()
+
     try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except OSError:
-        hostname_ip = socket.gethostbyname(socket.gethostname())
-        if hostname_ip and not hostname_ip.startswith("127."):
-            return hostname_ip
-        raise ScannerError(
-            "Unable to determine the local subnet automatically. Provide a target explicitly."
-        )
-    finally:
-        s.close()
+        addresses = socket.getaddrinfo(socket.gethostname(), None)
+    except socket.gaierror:
+        addresses = []
+
+    for family, _, _, _, sockaddr in addresses:
+        host = sockaddr[0]
+        try:
+            parsed = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if not parsed.is_loopback:
+            return host
+
+    raise ScannerError(
+        "Unable to determine the local subnet automatically. Provide a target explicitly."
+    )
 
 
 def get_default_target():
-    local_ip = get_local_ip()
-    return ".".join(local_ip.split(".")[:3]) + ".0/24"
+    local_ip = ipaddress.ip_address(get_local_ip())
+    if local_ip.version == 6:
+        return str(ipaddress.ip_network(f"{local_ip}/64", strict=False))
+    return str(ipaddress.ip_network(f"{local_ip}/24", strict=False))
 
 
 def format_product_name(service):
@@ -496,7 +364,7 @@ def synthesize_closed_ports(ports_spec, existing_ports, limit=CLOSED_PORT_DISPLA
     return candidates
 
 
-def extract_collapsed_closed_ports(nm, scanned_hosts):
+def extract_extraport_states(nm, scanned_hosts):
     xml_output = nm.get_nmap_last_output()
     if not xml_output:
         return {}
@@ -509,7 +377,7 @@ def extract_collapsed_closed_ports(nm, scanned_hosts):
     except ET.ParseError:
         return {}
 
-    collapsed_ports = {}
+    extraport_states = {}
     for host in root.findall("host"):
         if host.find("status") is None or host.find("status").attrib.get("state") != "up":
             continue
@@ -528,59 +396,21 @@ def extract_collapsed_closed_ports(nm, scanned_hosts):
         if ports_node is None:
             continue
 
-        port_specs = []
+        state_counts = {}
         for extraports in ports_node.findall("extraports"):
-            if extraports.attrib.get("state") != "closed":
+            state = extraports.attrib.get("state")
+            if not state:
                 continue
-            for reason in extraports.findall("extrareasons"):
-                ports_attr = reason.attrib.get("ports")
-                if ports_attr:
-                    port_specs.append(ports_attr)
+            try:
+                count = int(extraports.attrib.get("count", "0"))
+            except ValueError:
+                count = 0
+            state_counts[state] = state_counts.get(state, 0) + count
 
-        if port_specs:
-            collapsed_ports[host_id] = ",".join(port_specs)
+        if state_counts:
+            extraport_states[host_id] = state_counts
 
-    return collapsed_ports
-
-
-def request_ai_response(prompt, announce_message=None):
-    if announce_message:
-        print(announce_message)
-
-    payload = json.dumps({
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-    }).encode()
-    req = urllib.request.Request(
-        OLLAMA_API_URL,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        ai_start = time.time()
-        logger.debug("Sending AI request to %s", OLLAMA_API_URL)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read(AI_MAX_RESPONSE_BYTES + 1)
-            if len(raw) > AI_MAX_RESPONSE_BYTES:
-                logger.warning("AI response exceeded %d bytes, truncated", AI_MAX_RESPONSE_BYTES)
-                raw = raw[:AI_MAX_RESPONSE_BYTES]
-            data = json.loads(raw)
-        logger.debug("AI response received in %.1f seconds", time.time() - ai_start)
-    except urllib.error.URLError as exc:
-        logger.error("AI request failed (URL error): %s", exc)
-        raise AIAnalysisError(
-            "Could not reach Ollama at http://localhost:11434. Start Ollama or use --no-ai."
-        ) from exc
-    except json.JSONDecodeError as exc:
-        logger.error("AI response was not valid JSON")
-        raise AIAnalysisError("Ollama returned an invalid response.") from exc
-
-    response = data.get("response", "").strip()
-    if not response:
-        logger.warning("AI returned an empty response")
-        raise AIAnalysisError("Ollama returned an empty analysis.")
-    return sanitize_text(response)
+    return extraport_states
 
 
 SCAN_MODES = ("tcp", "udp", "both")
@@ -604,7 +434,42 @@ def _nmap_scan_args(scan_mode, chunk_spec):
         return f"-sV {base} -p {chunk_spec}"
 
 
-def _merge_host_info(combined, host_info, lock=None):
+def _add_closed_port_samples(entry, chunk_spec, scan_mode, ignored_states):
+    if not chunk_spec or not ignored_states or set(ignored_states) != {"closed"}:
+        return
+
+    existing_closed = sum(1 for port in entry["ports"] if port.get("state") == "closed")
+    remaining = CLOSED_PORT_DISPLAY_LIMIT - existing_closed
+    if remaining <= 0:
+        return
+
+    protocols = ["tcp", "udp"] if scan_mode == "both" else [scan_mode]
+    for protocol in protocols:
+        if remaining <= 0:
+            break
+
+        existing_ports = {
+            port_info["port"]
+            for port_info in entry["ports"]
+            if port_info.get("protocol", "tcp") == protocol
+        }
+        for port in synthesize_closed_ports(chunk_spec, existing_ports, limit=remaining):
+            service_name = lookup_service_name(port, protocol)
+            entry["ports"].append({
+                "port": port,
+                "protocol": protocol,
+                "state": "closed",
+                "service": service_name,
+                "product": "",
+                "version": "",
+                "risk": classify_risk(service_name),
+            })
+            remaining -= 1
+            if remaining <= 0:
+                break
+
+
+def _merge_host_info(combined, host_info, lock=None, chunk_spec=None, scan_mode="tcp", ignored_states=None):
     if lock:
         lock.acquire()
     try:
@@ -621,6 +486,8 @@ def _merge_host_info(combined, host_info, lock=None):
         entry["services"].extend(host_info["services"])
         if host_info.get("hostname"):
             entry["hostname"] = host_info["hostname"]
+        # Only synthesize hidden rows when nmap says every omitted port in this chunk was closed.
+        _add_closed_port_samples(entry, chunk_spec, scan_mode, ignored_states)
     finally:
         if lock:
             lock.release()
@@ -715,9 +582,17 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
                 logger.error("nmap scan failed on %s chunk %s: %s", host_target, chunk_spec, exc, exc_info=True)
                 raise ScannerError(f"nmap failed while scanning {host_target}: {exc}") from exc
 
+            ignored_states = extract_extraport_states(nm, set(nm.all_hosts()))
             for host in nm.all_hosts():
                 host_info = _parse_nmap_host(nm, host)
-                _merge_host_info(combined, host_info, lock=lock)
+                _merge_host_info(
+                    combined,
+                    host_info,
+                    lock=lock,
+                    chunk_spec=chunk_spec,
+                    scan_mode=scan_mode,
+                    ignored_states=ignored_states.get(host),
+                )
 
             with lock:
                 completed_work[0] += 1
@@ -750,9 +625,16 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
                     logger.error("nmap scan failed on %s chunk %s: %s", host_target, chunk_spec, exc, exc_info=True)
                     raise ScannerError(f"nmap failed while scanning {host_target}: {exc}") from exc
 
+                ignored_states = extract_extraport_states(nm, set(nm.all_hosts()))
                 for host in nm.all_hosts():
                     host_info = _parse_nmap_host(nm, host)
-                    _merge_host_info(combined, host_info)
+                    _merge_host_info(
+                        combined,
+                        host_info,
+                        chunk_spec=chunk_spec,
+                        scan_mode=scan_mode,
+                        ignored_states=ignored_states.get(host),
+                    )
 
                 completed_work += 1
                 if progress_callback:
@@ -799,77 +681,6 @@ def print_results(results):
                 f"  {port_label:<10} {svc['service']:<15} {product:<20} "
                 f"{color}{svc['risk']}{reset}"
             )
-
-
-def get_ai_analysis(results, announce=True):
-    services_summary = []
-    for host_info in results:
-        for svc in host_info["services"]:
-            services_summary.append(
-                f"Port {svc['port']}: {svc['service']} "
-                f"({format_product_name(svc)}) - Risk: {svc['risk']}"
-            )
-
-    if not services_summary:
-        return "No open services found to analyze."
-
-    prompt = (
-        "You are a cybersecurity expert. Analyze the following network scan results "
-        "from a local network scan. For each open service:\n"
-        "1. Identify what the port and service is — if the service name is empty, unknown, or "
-        "tcpwrapped, use the port number to explain what commonly runs on that port\n"
-        "2. Briefly explain what the service does\n"
-        "3. Explain why it could be a security risk\n"
-        "4. Suggest how to secure it\n\n"
-        "Keep explanations clear and accessible for someone without deep security knowledge.\n\n"
-        "Scan results:\n" + "\n".join(services_summary)
-    )
-
-    announce_message = None
-    if announce:
-        announce_message = "\n🤖 Generating AI security analysis (this may take a moment)..."
-    return request_ai_response(prompt, announce_message)
-
-
-def get_service_ai_analysis(service, announce=True):
-    location = service.get("host", "unknown host")
-    hostname = service.get("hostname") or "N/A"
-    service_name = service['service'] or "unidentified"
-    product = service.get('product', '') or "not detected"
-    prompt = (
-        "You are a cybersecurity expert. Analyze this single open network service and only this service.\n"
-        "Return plain text only in exactly this format:\n"
-        "Overview: <one short sentence about the detected service>\n\n"
-        "What is this: <explain what this port/service is typically used for, what software commonly runs on it, "
-        "and why it might be open on this machine — even if the service name is vague, empty, or wrapped>\n\n"
-        "Risks:\n"
-        "- <short risk>\n"
-        "- <short risk>\n\n"
-        "Actions:\n"
-        "1. <short action>\n"
-        "2. <short action>\n"
-        "3. <short action>\n\n"
-        "Rules:\n"
-        "- No markdown formatting, code blocks, bold text, or headings other than Overview, What is this, Risks, Actions.\n"
-        "- Add a blank line between each section (Overview, What is this, Risks, Actions).\n"
-        "- If the service name is empty, unknown, or tcpwrapped, use the port number to infer what "
-        "commonly runs there and explain that.\n"
-        "- Focus only on the selected port.\n"
-        "- Keep every line concise and easy to read in a terminal UI.\n\n"
-        f"Host: {location} ({hostname})\n"
-        f"Port: {service['port']}\n"
-        f"Service: {service_name}\n"
-        f"Product: {product}\n"
-        f"Risk: {service['risk']}"
-    )
-
-    announce_message = None
-    if announce:
-        announce_message = (
-            f"\n🤖 Generating AI security analysis for port {service['port']} "
-            f"({service['service']})..."
-        )
-    return request_ai_response(prompt, announce_message)
 
 
 def main():

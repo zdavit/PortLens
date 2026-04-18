@@ -38,3 +38,8 @@
 - [x] Validate interactive target immediately — run `validate_target()` on input instead of deferring to scan time
 - [x] Cap AI response size — limit reads from Ollama to 1 MB to prevent unbounded memory usage
 - [x] Validate history JSON schema — check required keys (`timestamp`, `target`, `ports`, `hosts`) and file size on load
+- [x] Expanded regression tests — cover validation, AI request handling, history loading, HTML/CSV export, and mocked network-map scans
+- [x] IPv6-aware defaults and sorting — support IPv6 default targets, subnet validation, and host ordering
+- [x] Full AI HTML export — fill in missing per-service AI sections during HTML report generation
+- [x] Scrollable diff viewer — show full scan diffs inside the dashboard history flow
+- [x] Richer network map metadata — include highest risk plus vendor/MAC details when available

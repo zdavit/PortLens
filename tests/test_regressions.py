@@ -7,7 +7,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 import firewall_rules
+import interactive_cli
 import scan_history
+import scanner
 
 
 class ScanDiffRegressionTests(unittest.TestCase):
@@ -97,6 +99,97 @@ class FirewallRegressionTests(unittest.TestCase):
 
         self.assertIn("iptables -A INPUT -p tcp --dport 6379", text)
         self.assertIn("firewall-cmd --permanent --remove-port=6379/tcp", text)
+
+
+class ClosedPortRegressionTests(unittest.TestCase):
+    def test_extract_extraport_states_reads_closed_counts(self):
+        xml = """<?xml version='1.0'?>
+<nmaprun>
+  <host>
+    <status state='up'/>
+    <address addr='127.0.0.1' addrtype='ipv4'/>
+    <ports>
+      <extraports state='closed' count='4'>
+        <extrareasons reason='resets' count='4'/>
+      </extraports>
+    </ports>
+  </host>
+</nmaprun>
+"""
+
+        class FakeScanner:
+            def get_nmap_last_output(self):
+                return xml
+
+        states = scanner.extract_extraport_states(FakeScanner(), {"127.0.0.1"})
+
+        self.assertEqual(states, {"127.0.0.1": {"closed": 4}})
+
+    def test_merge_host_info_synthesizes_closed_rows_for_definite_closed_ports(self):
+        combined = {}
+        host_info = {
+            "host": "127.0.0.1",
+            "hostname": "localhost",
+            "state": "up",
+            "services": [
+                {
+                    "port": 22,
+                    "protocol": "tcp",
+                    "state": "open",
+                    "service": "ssh",
+                    "product": "OpenSSH",
+                    "version": "9.0",
+                    "risk": "Medium",
+                }
+            ],
+            "ports": [
+                {
+                    "port": 22,
+                    "protocol": "tcp",
+                    "state": "open",
+                    "service": "ssh",
+                    "product": "OpenSSH",
+                    "version": "9.0",
+                    "risk": "Medium",
+                }
+            ],
+        }
+
+        scanner._merge_host_info(
+            combined,
+            host_info,
+            chunk_spec="21-25",
+            scan_mode="tcp",
+            ignored_states={"closed": 4},
+        )
+
+        app = interactive_cli.DashboardApp(initial_target="localhost", initial_ports="21-25")
+        app.results = list(combined.values())
+        app.show_closed = True
+        rows = app.flatten_services()
+        closed_rows = [row for row in rows if row["state"] == "closed"]
+
+        self.assertEqual({row["port"] for row in closed_rows}, {21, 23, 24, 25})
+
+    def test_merge_host_info_skips_synthesis_when_ignored_states_are_mixed(self):
+        combined = {}
+        host_info = {
+            "host": "127.0.0.1",
+            "hostname": "localhost",
+            "state": "up",
+            "services": [],
+            "ports": [],
+        }
+
+        scanner._merge_host_info(
+            combined,
+            host_info,
+            chunk_spec="1-5",
+            scan_mode="tcp",
+            ignored_states={"closed": 3, "filtered": 2},
+        )
+
+        self.assertEqual(combined["127.0.0.1"]["ports"], [])
 
 
 if __name__ == "__main__":

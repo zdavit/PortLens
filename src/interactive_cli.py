@@ -56,6 +56,7 @@ class DashboardApp:
         self.watch_interval = 60
         self.watch_timer = None
         self.watch_previous_results = None
+        self._last_diff = ""
 
     def _safe_default_target(self):
         try:
@@ -415,7 +416,12 @@ class DashboardApp:
             elif key in (ord("x"), ord("X")) and not self.running and self.results:
                 try:
                     html_path = scan_history.export_html(
-                        self.results, self.target, self.ports, ai_cache=self.analysis_cache,
+                        self.results,
+                        self.target,
+                        self.ports,
+                        ai_cache=self.analysis_cache,
+                        fill_missing_ai=self.use_ai,
+                        analysis_getter=lambda svc: scanner.get_service_ai_analysis(svc, announce=False),
                     )
                     self.status_message = f"HTML report: {os.path.basename(html_path)}"
                 except OSError as exc:
@@ -624,11 +630,72 @@ class DashboardApp:
                 try:
                     old_scan = scan_history.load_scan(chosen["filepath"])
                     diff = scan_history.diff_scans(old_scan["hosts"], self.results)
-                    self.status_message = scan_history.format_diff(diff).split("\n")[0]
-                    self._last_diff = scan_history.format_diff(diff)
+                    diff_text = scan_history.format_diff(diff)
+                    self.status_message = diff_text.split("\n")[0]
+                    self._last_diff = diff_text
+                    self.show_text_viewer(stdscr, "Scan Diff", diff_text)
                 except (OSError, ValueError, KeyError) as exc:
                     self.status_message = f"Diff failed: {exc}"
                 return
+
+    def show_text_viewer(self, stdscr, title, text, footer="↑↓ scroll | q close"):
+        raw_lines = text.splitlines() or [""]
+        height, width = stdscr.getmaxyx()
+        box_height = min(max(12, height - 4), height - 2)
+        box_width = min(max(70, width - 4), width - 2)
+        start_y = max(1, (height - box_height) // 2)
+        start_x = max(1, (width - box_width) // 2)
+        window = curses.newwin(box_height, box_width, start_y, start_x)
+        window.keypad(True)
+        scroll = 0
+        view_height = box_height - 5
+        content_width = max(20, box_width - 4)
+
+        lines = []
+        for raw_line in raw_lines:
+            wrapped = textwrap.wrap(
+                raw_line,
+                width=content_width,
+                replace_whitespace=False,
+                drop_whitespace=False,
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+            lines.extend(wrapped or [""])
+
+        while True:
+            window.erase()
+            if self.has_colors:
+                window.attron(self.color(COLOR_PANEL))
+                window.border()
+                window.attroff(self.color(COLOR_PANEL))
+            else:
+                window.border()
+            window.addnstr(0, 2, f" {title} ", box_width - 4, self.color(COLOR_ACCENT) | curses.A_BOLD)
+
+            visible = lines[scroll:scroll + view_height]
+            for i, line in enumerate(visible):
+                attr = self.color(COLOR_MUTED)
+                if line.startswith(("NEW ", "CLOSED ", "Risk level changes:")):
+                    attr = self.color(COLOR_ACCENT) | curses.A_BOLD
+                elif line.startswith("  +"):
+                    attr = self.color(COLOR_SUCCESS) | curses.A_BOLD
+                elif line.startswith("  -"):
+                    attr = self.color(COLOR_WARNING) | curses.A_BOLD
+                elif line.startswith("  ~"):
+                    attr = self.color(COLOR_AI) | curses.A_BOLD
+                window.addnstr(2 + i, 2, line, box_width - 4, attr)
+
+            window.addnstr(box_height - 2, 2, footer, box_width - 4, self.color(COLOR_MUTED))
+            window.refresh()
+
+            key = window.getch()
+            if key in (ord("q"), ord("Q"), 27):
+                return
+            if key in (curses.KEY_UP, ord("k")):
+                scroll = max(0, scroll - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                scroll = min(max(0, len(lines) - view_height), scroll + 1)
 
     def show_network_map(self, stdscr):
         hosts = self.network_map
@@ -638,7 +705,7 @@ class DashboardApp:
 
         height, width = stdscr.getmaxyx()
         box_height = min(len(hosts) + 7, height - 4)
-        box_width = min(100, max(70, width - 4))
+        box_width = min(126, max(84, width - 4))
         start_y = max(1, (height - box_height) // 2)
         start_x = max(2, (width - box_width) // 2)
         window = curses.newwin(box_height, box_width, start_y, start_x)
@@ -662,7 +729,15 @@ class DashboardApp:
             summary = f"{len(hosts)} host(s) discovered on {subnet}"
             window.addnstr(2, 2, summary, box_width - 4, self.color(COLOR_MUTED))
 
-            header = f"  {'Host':<17} {'Hostname':<16} {'State':<7} {'Ports':<6} OS Guess"
+            host_width = 24
+            name_width = 16
+            risk_width = 8
+            vendor_width = 16
+            os_width = max(12, box_width - (host_width + name_width + risk_width + vendor_width + 20))
+            header = (
+                f"  {'Host':<{host_width}} {'Hostname':<{name_width}} {'Ports':<6} "
+                f"{'Risk':<{risk_width}} {'Vendor':<{vendor_width}} OS Guess"
+            )
             window.addnstr(4, 2, header, box_width - 4,
                            self.color(COLOR_ACCENT) | curses.A_BOLD)
 
@@ -674,19 +749,23 @@ class DashboardApp:
             visible = hosts[scroll:scroll + view_height]
             for i, host in enumerate(visible):
                 actual = scroll + i
-                os_col = host["os_guess"][:box_width - 55]
+                os_col = host.get("os_guess", "Unknown")[:os_width]
+                vendor_col = (host.get("vendor") or host.get("mac") or "N/A")[:vendor_width]
                 line = (
-                    f"  {host['host']:<17} "
-                    f"{(host['hostname'] or 'N/A')[:15]:<16} "
-                    f"{host['state']:<7} "
+                    f"  {host['host'][:host_width]:<{host_width}} "
+                    f"{(host['hostname'] or 'N/A')[:name_width-1]:<{name_width}} "
                     f"{host['open_port_count']:<6} "
+                    f"{host.get('top_risk', 'Unknown')[:risk_width]:<{risk_width}} "
+                    f"{vendor_col:<{vendor_width}} "
                     f"{os_col}"
                 )
                 if actual == selected:
                     attr = self.color(COLOR_SELECTION, curses.A_REVERSE) | curses.A_BOLD
                 elif host["open_port_count"] == 0:
                     attr = self.color(COLOR_MUTED)
-                elif host["open_port_count"] >= 5:
+                elif host.get("top_risk") == "Critical":
+                    attr = self.color(COLOR_DANGER) | curses.A_BOLD
+                elif host.get("top_risk") == "High":
                     attr = self.color(COLOR_WARNING) | curses.A_BOLD
                 else:
                     attr = self.color(COLOR_SUCCESS)
@@ -707,7 +786,8 @@ class DashboardApp:
             elif key in (10, curses.KEY_ENTER):
                 chosen = hosts[selected]
                 self.target = chosen["host"]
-                self.status_message = f"Target set to {self.target}. Press r to scan."
+                summary = chosen.get("top_services", "No open ports")
+                self.status_message = f"Target set to {self.target}. Top services: {summary}"
                 return
             elif key in (ord("r"), ord("R")):
                 del window
@@ -1027,6 +1107,7 @@ class DashboardApp:
             if host_info:
                 score = scanner.compute_host_score(host_info)
                 lines.append(f"Security Score: {score}/100 ({scanner.score_label(score)})")
+                lines.append(f"Exposure: {scanner.host_exposure_summary(host_info)}")
             lines.append(f"Port: {selected_service['port']}")
             lines.append(f"Service: {selected_service['service']}")
             lines.append(f"State: {selected_service['state']}")
@@ -1115,6 +1196,8 @@ class DashboardApp:
                     attr = self.color(COLOR_SUCCESS) | curses.A_BOLD
                 else:
                     attr = self.color(COLOR_SUCCESS) | curses.A_BOLD
+            elif line.startswith("Exposure:"):
+                attr = self.color(COLOR_PANEL) | curses.A_BOLD
             elif line.startswith(("Host:", "Port:", "Service:", "Product:", "State:")):
                 attr = self.color(COLOR_MUTED) | curses.A_BOLD
             elif selected_key and selected_key in self.analysis_errors:

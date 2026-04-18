@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import os
 
@@ -11,6 +12,14 @@ except ImportError:
 logger = logging.getLogger("scanner")
 
 _OS_FAMILY_KEYWORDS = ["Linux", "Windows", "macOS", "FreeBSD", "OpenBSD", "NetBSD", "iOS", "Android"]
+
+
+def _host_sort_key(host):
+    try:
+        parsed = ipaddress.ip_address(host)
+        return (0, parsed.version, int(parsed))
+    except ValueError:
+        return (1, str(host).lower())
 
 
 def _best_os_guess(os_matches):
@@ -70,7 +79,7 @@ def discover_hosts(target, announce=True, progress_callback=None):
                 "hostname": nm[host].hostname() or "",
             })
 
-    live_hosts.sort(key=lambda h: tuple(int(p) for p in h["ip"].split(".") if p.isdigit()))
+    live_hosts.sort(key=lambda h: _host_sort_key(h["ip"]))
     logger.info("Host discovery found %d live host(s)", len(live_hosts))
     if announce:
         print(f"   Found {len(live_hosts)} live host(s).")
@@ -108,6 +117,10 @@ def scan_network_map(target, progress_callback=None):
     for host in nm.all_hosts():
         hostname = nm[host].hostname() or ""
         state = nm[host].state()
+        addresses = nm[host].get("addresses", {})
+        mac = addresses.get("mac", "") if isinstance(addresses, dict) else ""
+        vendor_data = nm[host].get("vendor", {})
+        vendor = next(iter(vendor_data.values()), "") if isinstance(vendor_data, dict) else ""
 
         os_guess = "Unknown"
         try:
@@ -118,10 +131,24 @@ def scan_network_map(target, progress_callback=None):
             pass
 
         open_count = 0
+        open_services = []
         for proto in nm[host].all_protocols():
             for port in nm[host][proto]:
-                if nm[host][proto][port].get("state") == "open":
+                port_info = nm[host][proto][port]
+                if port_info.get("state") == "open":
                     open_count += 1
+                    service_name = scanner.sanitize_banner(port_info.get("name", "unknown"))
+                    product = scanner.sanitize_banner(port_info.get("product", ""))
+                    version = scanner.sanitize_banner(port_info.get("version", ""))
+                    open_services.append({
+                        "service": service_name,
+                        "risk": scanner.classify_risk(service_name, product, version),
+                    })
+
+        top_risk = scanner.highest_risk_level(open_services) if open_services else "Unknown"
+        top_services = ", ".join(
+            svc["service"] for svc in open_services[:3] if svc.get("service")
+        ) or "No open ports"
 
         hosts.append({
             "host": host,
@@ -129,8 +156,12 @@ def scan_network_map(target, progress_callback=None):
             "os_guess": os_guess,
             "open_port_count": open_count,
             "state": state,
+            "mac": mac,
+            "vendor": vendor,
+            "top_risk": top_risk,
+            "top_services": top_services,
         })
 
-    hosts.sort(key=lambda h: tuple(int(p) for p in h["host"].split(".") if p.isdigit()))
+    hosts.sort(key=lambda h: _host_sort_key(h["host"]))
     logger.info("Network map found %d host(s)", len(hosts))
     return hosts

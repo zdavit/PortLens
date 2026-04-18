@@ -7,6 +7,8 @@ import os
 import stat
 from datetime import datetime
 
+import scanner
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HISTORY_DIR = os.path.join(BASE_DIR, "scan_history")
 os.makedirs(HISTORY_DIR, mode=0o700, exist_ok=True)
@@ -272,7 +274,40 @@ _RISK_COLORS = {
 }
 
 
-def export_html(results, target, ports, ai_cache=None, filepath=None):
+def _analysis_cache_key(host, service):
+    return (host, service["port"], service["service"], service.get("state", "open"))
+
+
+def populate_ai_cache(results, ai_cache=None, analysis_getter=None):
+    if ai_cache is None:
+        ai_cache = {}
+    if analysis_getter is None:
+        return ai_cache
+
+    for host_info in results:
+        for svc in host_info.get("services", []):
+            key = _analysis_cache_key(host_info["host"], svc)
+            if key in ai_cache:
+                continue
+
+            service_record = svc.copy()
+            service_record["host"] = host_info["host"]
+            service_record["hostname"] = host_info.get("hostname") or "N/A"
+
+            try:
+                ai_cache[key] = analysis_getter(service_record)
+            except Exception as exc:
+                logger.warning(
+                    "Skipping AI analysis for %s:%s/%s in HTML export: %s",
+                    host_info["host"],
+                    svc["port"],
+                    svc.get("protocol", "tcp"),
+                    exc,
+                )
+    return ai_cache
+
+
+def export_html(results, target, ports, ai_cache=None, filepath=None, fill_missing_ai=False, analysis_getter=None):
     """Generate a self-contained HTML security report."""
     ts = _timestamp()
     if filepath is None:
@@ -280,6 +315,9 @@ def export_html(results, target, ports, ai_cache=None, filepath=None):
 
     if ai_cache is None:
         ai_cache = {}
+
+    if fill_missing_ai:
+        populate_ai_cache(results, ai_cache=ai_cache, analysis_getter=analysis_getter)
 
     e = html.escape
 
@@ -289,12 +327,8 @@ def export_html(results, target, ports, ai_cache=None, filepath=None):
         hostname = host_info.get("hostname") or "N/A"
         services = host_info.get("services", [])
 
-        # Compute score inline
-        penalty = 0
-        risk_penalties = {"Critical": 25, "High": 15, "Medium": 8, "Low": 3, "Unknown": 5}
-        for svc in services:
-            penalty += risk_penalties.get(svc.get("risk", "Unknown"), 5)
-        score = max(0, 100 - penalty)
+        score = scanner.compute_host_score(host_info)
+        exposure = scanner.host_exposure_summary(host_info)
 
         rows = []
         for svc in host_info.get("ports", services):
@@ -316,12 +350,12 @@ def export_html(results, target, ports, ai_cache=None, filepath=None):
 
         ai_sections = []
         for svc in services:
-            key = (host, svc["port"], svc["service"], svc.get("state", "open"))
+            key = _analysis_cache_key(host, svc)
             analysis = ai_cache.get(key)
             if analysis:
                 ai_sections.append(
                     f'<div class="ai-box">'
-                    f'<h4>Port {svc["port"]} — {e(svc["service"])}</h4>'
+                    f'<h4>Port {svc["port"]}/{e(svc.get("protocol", "tcp"))} — {e(svc["service"])}</h4>'
                     f'<pre>{e(analysis)}</pre>'
                     f'</div>'
                 )
@@ -332,7 +366,7 @@ def export_html(results, target, ports, ai_cache=None, filepath=None):
             f'<div class="host">'
             f'<h2>{e(host)} ({e(hostname)})</h2>'
             f'<p>Security Score: <strong>{score}/100</strong> | '
-            f'Open services: {len(services)}</p>'
+            f'Open services: {len(services)} | Exposure: {e(exposure)}</p>'
             f'<table><thead><tr>'
             f'<th>Port</th><th>State</th><th>Service</th><th>Product</th><th>Risk</th>'
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'

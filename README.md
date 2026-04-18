@@ -16,9 +16,9 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 
 ## Features
 
-- **Network device mapping** — scan a subnet and view a table of all discovered hosts with hostname, OS guess (`nmap -O`), and open port count (press `m` in the dashboard); select a host to set it as the scan target
+- **Network device mapping** — scan a subnet and view a table of all discovered hosts with hostname, highest observed risk, vendor/MAC info when available, and OS guess (`nmap -O`); select a host to set it as the scan target
 - **Two-phase scanning** — automatic ping sweep discovers live hosts first, then only port-scans those hosts (dramatically faster on subnets)
-- **Security score summary** — per-host 0-100 security score based on the number and severity of open services, shown in the detail pane
+- **Security score summary** — per-host 0-100 security score based on the number, severity, and exposure type of open services, shown in the detail pane
 - **Target input validation** — rejects shell characters, nmap option injection, and overly broad subnets before scanning
 - **Full port scanning** — scan any range up to all 65535 ports with parallel chunked nmap (8 concurrent workers, `-T4`, `--min-rate 300`, `-sV`)
 - **70+ service risk classifications** — covers remote access, web, databases, file sharing, printing, DNS, RPC, containers, and more
@@ -33,7 +33,9 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Friendly error handling** — clear messages when nmap or Ollama are unavailable instead of crashes
 - **Localhost validation script** — automated testing of scan output against expected services
 - **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports for this machine only (`g` key in dashboard, `--firewall` flag in CLI)
-- **HTML report export** — self-contained HTML security report with scores, port tables, and AI analysis (`x` key in dashboard)
+- **HTML report export** — self-contained HTML security report with scores, port tables, and complete per-service AI analysis (`x` key in dashboard)
+- **IPv4 + IPv6 aware defaults** — automatic target detection, subnet validation, and host sorting now handle both IPv4 and IPv6 targets safely
+- **Expanded regression tests** — automated tests cover validation, history loading, AI request handling, HTML/CSV export, and mocked network-map scans
 - **Security hardening** — atomic file creation with `0o600` permissions, CSV formula injection prevention, AI output sanitization, shell-safe firewall rule generation, scan history schema validation
 - **Fully local** — no API keys or cloud services required
 
@@ -94,19 +96,19 @@ Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover 
 | `f` | Set ports to 1-65535 (full scan) |
 | `d` | Reset target to auto-detected local subnet |
 | `u` | Cycle scan mode (TCP / UDP / Both) |
-| `m` | Network map — discover hosts with OS detection (requires root) |
+| `m` | Network map — discover hosts with OS detection, risk summary, and vendor/MAC info (requires root) |
 | `w` | Toggle watch mode (auto-rescan every 60s) |
 | `g` | Generate firewall rules for risky ports |
 | `o` | Toggle open-only / open+closed port view |
 | `a` | Toggle AI analysis on/off |
 | `e` | Export current results to CSV |
 | `x` | Export HTML security report |
-| `h` | Browse scan history and diff against current results |
+| `h` | Browse scan history and open a scrollable diff viewer against current results |
 | `↑/↓` | Navigate through detected services |
 | `←/→` | Scroll details pane |
 | `q` | Quit the dashboard |
 
-The dashboard keeps scans running in the background, shows live progress, lists open services in a color-coded table, and displays per-service details with a security score and AI-generated explanation for the currently selected port.
+The dashboard keeps scans running in the background, shows live progress, lists open services in a color-coded table, and displays per-service details with a security score, exposure summary, and AI-generated explanation for the currently selected port.
 
 ## Risk Classification
 
@@ -119,11 +121,17 @@ Services are classified into four risk levels based on the service type and dete
 | **Medium** | Orange | SSH (current), SMTP, DNS, RPC, tcpwrapped, unidentified services |
 | **Low** | Green | HTTP/HTTPS, LLMNR, mDNS, IPP/CUPS printing |
 
-Version-aware overrides automatically escalate risk when outdated software is detected (e.g., OpenSSH < 8.0, Apache < 2.4, vsftpd < 3.0).
+Version-aware overrides automatically escalate risk when outdated software is detected (e.g., OpenSSH < 8.0, Apache < 2.4, nginx < 1.18, Samba < 4.15, vsftpd < 3.0).
 
 ## Validation
 
 Use the validation script to confirm the localhost scan path still works and that expected services are detected.
+
+For the automated regression suite:
+
+```bash
+python3 -m unittest discover -s tests -p 'test*.py'
+```
 
 ```bash
 # Validate the scan structure only
