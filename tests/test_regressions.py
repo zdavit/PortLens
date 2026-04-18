@@ -100,6 +100,38 @@ class FirewallRegressionTests(unittest.TestCase):
         self.assertIn("iptables -A INPUT -p tcp --dport 6379", text)
         self.assertIn("firewall-cmd --permanent --remove-port=6379/tcp", text)
 
+    def test_firewall_rules_generate_ip6tables_for_local_ipv6_hosts(self):
+        results = [
+            {
+                "host": "::1",
+                "services": [
+                    {"port": 6379, "protocol": "tcp", "service": "redis", "risk": "Critical"}
+                ],
+            }
+        ]
+
+        with unittest.mock.patch("firewall_rules._local_host_aliases", return_value={"::1"}):
+            text = firewall_rules.generate_rules_text(results)
+
+        self.assertIn("ip6tables -A INPUT -p tcp --dport 6379", text)
+        self.assertNotIn("iptables -A INPUT -p tcp --dport 6379", text)
+
+    def test_firewall_rules_refuse_remote_ipv6_results(self):
+        results = [
+            {
+                "host": "2001:db8::55",
+                "services": [
+                    {"port": 6379, "protocol": "tcp", "service": "redis", "risk": "Critical"}
+                ],
+            }
+        ]
+
+        with unittest.mock.patch("firewall_rules._local_host_aliases", return_value={"::1"}):
+            text = firewall_rules.generate_rules_text(results)
+
+        self.assertIn("only safe for scans of this machine", text)
+        self.assertNotIn("ip6tables -A INPUT", text)
+
 
 class ClosedPortRegressionTests(unittest.TestCase):
     def test_extract_extraport_states_reads_closed_counts(self):
@@ -190,6 +222,80 @@ class ClosedPortRegressionTests(unittest.TestCase):
         )
 
         self.assertEqual(combined["127.0.0.1"]["ports"], [])
+
+
+class AiCacheAndWatchRegressionTests(unittest.TestCase):
+    def test_dashboard_service_key_distinguishes_protocols(self):
+        app = interactive_cli.DashboardApp(initial_target="localhost", initial_ports="53")
+
+        tcp_key = app.service_key({
+            "host": "127.0.0.1",
+            "port": 53,
+            "protocol": "tcp",
+            "service": "domain",
+            "state": "open",
+        })
+        udp_key = app.service_key({
+            "host": "127.0.0.1",
+            "port": 53,
+            "protocol": "udp",
+            "service": "domain",
+            "state": "open",
+        })
+
+        self.assertNotEqual(tcp_key, udp_key)
+
+    def test_html_ai_cache_key_distinguishes_protocols(self):
+        tcp_key = scan_history._analysis_cache_key("127.0.0.1", {
+            "port": 53,
+            "protocol": "tcp",
+            "service": "domain",
+            "state": "open",
+        })
+        udp_key = scan_history._analysis_cache_key("127.0.0.1", {
+            "port": 53,
+            "protocol": "udp",
+            "service": "domain",
+            "state": "open",
+        })
+
+        self.assertNotEqual(tcp_key, udp_key)
+
+    def test_watch_mode_skips_history_export_when_results_do_not_change(self):
+        app = interactive_cli.DashboardApp(initial_target="localhost", initial_ports="22")
+        app.watch_mode = True
+        app.watch_previous_results = [{"host": "127.0.0.1", "services": []}]
+        app.scan_triggered_by_watch = True
+        payload = [{"host": "127.0.0.1", "hostname": "localhost", "services": [], "ports": []}]
+        app.events.put(("results", payload))
+
+        with unittest.mock.patch("interactive_cli.scan_history.diff_scans", return_value={
+            "opened": [],
+            "closed": [],
+            "risk_changes": [],
+            "unchanged": 0,
+        }), unittest.mock.patch("interactive_cli.scan_history.export_json") as export_json:
+            app.process_events()
+
+        export_json.assert_not_called()
+
+    def test_watch_mode_still_saves_when_results_change(self):
+        app = interactive_cli.DashboardApp(initial_target="localhost", initial_ports="22")
+        app.watch_mode = True
+        app.watch_previous_results = [{"host": "127.0.0.1", "services": []}]
+        app.scan_triggered_by_watch = True
+        payload = [{"host": "127.0.0.1", "hostname": "localhost", "services": [], "ports": []}]
+        app.events.put(("results", payload))
+
+        with unittest.mock.patch("interactive_cli.scan_history.diff_scans", return_value={
+            "opened": [{"host": "127.0.0.1", "port": 22, "protocol": "tcp", "service": "ssh"}],
+            "closed": [],
+            "risk_changes": [],
+            "unchanged": 0,
+        }), unittest.mock.patch("interactive_cli.scan_history.export_json", return_value="scan.json") as export_json:
+            app.process_events()
+
+        export_json.assert_called_once_with(payload, "localhost", "22")
 
 
 if __name__ == "__main__":

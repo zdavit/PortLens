@@ -35,6 +35,10 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports for this machine only (`g` key in dashboard, `--firewall` flag in CLI)
 - **HTML report export** — self-contained HTML security report with scores, port tables, and complete per-service AI analysis (`x` key in dashboard)
 - **IPv4 + IPv6 aware defaults** — automatic target detection, subnet validation, and host sorting now handle both IPv4 and IPv6 targets safely
+- **Deterministic scan normalization** — overlapping port inputs are merged, non-contiguous ranges stay exact, and final host/service rows are sorted and deduplicated before display/export
+- **Bounded AI summaries** — large whole-scan AI requests are capped to the highest-priority services so subnet scans stay responsive and prompts stay manageable
+- **Smarter watch mode history** — automatic watch rescans only save new history entries when something actually changes
+- **IPv6 firewall parity** — local IPv6 scans now generate `ip6tables` suggestions alongside existing `iptables`/`firewalld` output where appropriate
 - **Expanded regression tests** — automated tests cover validation, history loading, AI request handling, HTML/CSV export, and mocked network-map scans
 - **Security hardening** — atomic file creation with `0o600` permissions, CSV formula injection prevention, AI output sanitization, shell-safe firewall rule generation, scan history schema validation
 - **Fully local** — no API keys or cloud services required
@@ -43,14 +47,16 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 
 ```
 src/
-  scanner.py          # Core scanner, risk classification, AI prompts, CLI entry point
+  scanner.py          # Core scanner, normalization helpers, and CLI entry point
+  ai_client.py        # Ollama request handling and AI prompt generation
+  risk_model.py       # Risk classification, exposure tags, and host scoring
   network_map.py      # Host discovery (ping sweep) and OS-detection mapping
   interactive_cli.py  # Full-screen curses dashboard
-  scan_history.py     # JSON/CSV export, history listing, scan diffing
-  firewall_rules.py   # iptables/firewalld rule generation for risky ports
+  scan_history.py     # JSON/CSV/HTML export, history listing, scan diffing
+  firewall_rules.py   # iptables/ip6tables/firewalld rule generation for risky ports
   validate_localhost.py  # Automated validation script
 logs/                 # Debug/error logs (gitignored)
-scan_history/         # Saved scan results as JSON/CSV (gitignored)
+scan_history/         # Saved scan results and reports (gitignored)
 venv/                 # Python virtual environment (gitignored)
 ```
 
@@ -83,6 +89,19 @@ sudo venv/bin/python src/scanner.py --interactive
 
 For full CLI usage details, run `python3 src/scanner.py --help`.
 
+Useful export examples:
+
+```bash
+# Save CSV and JSON
+python3 src/scanner.py localhost --export both
+
+# Save an HTML report directly from the CLI
+python3 src/scanner.py localhost --export html
+
+# Save everything at once
+python3 src/scanner.py localhost --export all
+```
+
 Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover hosts on your subnet, or `?` for all keybindings. Selecting a host in the network map sets it as the scan target.
 
 #### Keybindings
@@ -108,7 +127,7 @@ Interactive mode opens to an idle dashboard. Press `r` to scan, `m` to discover 
 | `←/→` | Scroll details pane |
 | `q` | Quit the dashboard |
 
-The dashboard keeps scans running in the background, shows live progress, lists open services in a color-coded table, and displays per-service details with a security score, exposure summary, and AI-generated explanation for the currently selected port.
+The dashboard keeps scans running in the background, shows live progress, lists open services in a color-coded table, and displays per-service details with a security score, exposure summary, and AI-generated explanation for the currently selected port. In watch mode, unchanged rescans update the status banner but do not create extra history files.
 
 ## Risk Classification
 
@@ -121,7 +140,7 @@ Services are classified into four risk levels based on the service type and dete
 | **Medium** | Orange | SSH (current), SMTP, DNS, RPC, tcpwrapped, unidentified services |
 | **Low** | Green | HTTP/HTTPS, LLMNR, mDNS, IPP/CUPS printing |
 
-Version-aware overrides automatically escalate risk when outdated software is detected (e.g., OpenSSH < 8.0, Apache < 2.4, nginx < 1.18, Samba < 4.15, vsftpd < 3.0).
+Version-aware overrides automatically escalate risk when outdated software is detected (e.g., OpenSSH < 8.0, Apache < 2.4, nginx < 1.18, Samba < 4.15, vsftpd < 3.0). Whole-scan AI summaries are automatically limited to the highest-priority services so large subnet scans do not overwhelm the local model.
 
 ## Validation
 

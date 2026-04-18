@@ -219,13 +219,45 @@ def collect_open_services(results):
     return [service for host in results for service in host["services"]]
 
 
+def _host_sort_key(host):
+    try:
+        parsed = ipaddress.ip_address(host)
+        return (0, parsed.version, int(parsed))
+    except ValueError:
+        return (1, str(host).lower())
+
+
+def _merge_port_ranges(ranges):
+    if not ranges:
+        return []
+
+    merged = []
+    for start, end in sorted(ranges):
+        if not merged or start > merged[-1][1] + 1:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+
+    return [(start, end) for start, end in merged]
+
+
+def _format_port_ranges(ranges):
+    return ",".join(
+        f"{start}-{end}" if start != end else str(start)
+        for start, end in ranges
+    )
+
+
+def _format_port_list(ports):
+    return _format_port_ranges(_merge_port_ranges((port, port) for port in ports))
+
+
 def validate_ports_spec(ports_spec):
     logger.debug("Validating port spec: %s", ports_spec)
     if not ports_spec or not ports_spec.strip():
         raise ScannerError("Port range cannot be empty.")
 
-    total_ports = 0
-    normalized_chunks = []
+    ranges = []
 
     for chunk in ports_spec.split(","):
         chunk = chunk.strip()
@@ -259,40 +291,30 @@ def validate_ports_spec(ports_spec):
                 f"Port ranges are limited to {MAX_PORT_NUMBER} or lower to keep scans responsive."
             )
 
-        total_ports += end - start + 1
-        if total_ports > MAX_PORTS_PER_SCAN:
-            raise ScannerError(
-                f"Port ranges are limited to {MAX_PORTS_PER_SCAN} ports per scan to avoid long hangs."
-            )
+        ranges.append((start, end))
 
-        normalized_chunks.append(f"{start}-{end}" if start != end else str(start))
+    merged_ranges = _merge_port_ranges(ranges)
+    total_ports = sum(end - start + 1 for start, end in merged_ranges)
+    if total_ports > MAX_PORTS_PER_SCAN:
+        raise ScannerError(
+            f"Port ranges are limited to {MAX_PORTS_PER_SCAN} ports per scan to avoid long hangs."
+        )
 
-    return ",".join(normalized_chunks)
+    return _format_port_ranges(merged_ranges)
 
 
 def count_ports_in_spec(ports_spec):
-    total = 0
-    for chunk in ports_spec.split(","):
-        chunk = chunk.strip()
-        if not chunk:
-            continue
-        if "-" in chunk:
-            start, end = chunk.split("-", 1)
-            total += int(end) - int(start) + 1
-        else:
-            total += 1
-    return total
+    ranges = _merge_port_ranges(parse_port_ranges(ports_spec))
+    return sum(end - start + 1 for start, end in ranges)
 
 
 def chunk_port_spec(ports_spec, chunk_size=SCAN_CHUNK_SIZE):
-    all_ports = list(iter_ports_in_ranges(parse_port_ranges(ports_spec)))
+    ranges = _merge_port_ranges(parse_port_ranges(ports_spec))
+    all_ports = list(iter_ports_in_ranges(ranges))
     chunks = []
     for i in range(0, len(all_ports), chunk_size):
         batch = all_ports[i : i + chunk_size]
-        if len(batch) == 1:
-            chunks.append(str(batch[0]))
-        else:
-            chunks.append(f"{batch[0]}-{batch[-1]}")
+        chunks.append(_format_port_list(batch))
     return chunks
 
 
@@ -326,6 +348,46 @@ def parse_port_ranges(ports_spec):
                 continue
             ranges.append((port, port))
     return ranges
+
+
+def _record_sort_key(record):
+    return (
+        int(record.get("port", 0)),
+        record.get("protocol", "tcp"),
+        0 if record.get("state", "open") == "open" else 1,
+        record.get("service", ""),
+        record.get("product", ""),
+        record.get("version", ""),
+    )
+
+
+def _record_identity(record):
+    return (
+        int(record.get("port", 0)),
+        record.get("protocol", "tcp"),
+        record.get("state", "open"),
+        record.get("service", ""),
+        record.get("product", ""),
+        record.get("version", ""),
+        record.get("risk", "Unknown"),
+    )
+
+
+def _dedupe_and_sort_records(records):
+    deduped = {}
+    for record in records:
+        deduped[_record_identity(record)] = record.copy()
+    return sorted(deduped.values(), key=_record_sort_key)
+
+
+def _finalize_results(results):
+    finalized = []
+    for host_info in sorted(results, key=lambda host: _host_sort_key(host["host"])):
+        entry = host_info.copy()
+        entry["ports"] = _dedupe_and_sort_records(entry.get("ports", []))
+        entry["services"] = _dedupe_and_sort_records(entry.get("services", []))
+        finalized.append(entry)
+    return finalized
 
 
 def port_in_ranges(port, ranges):
@@ -643,7 +705,7 @@ def scan_network(target, ports=DEFAULT_PORT_RANGE, announce=True, progress_callb
     scan_elapsed = time.time() - scan_start
     logger.info("nmap scan finished in %.1f seconds", scan_elapsed)
 
-    results = list(combined.values())
+    results = _finalize_results(list(combined.values()))
 
     total_open = sum(len(h["services"]) for h in results)
     total_port_records = sum(len(h["ports"]) for h in results)
@@ -718,9 +780,9 @@ def main():
     )
     parser.add_argument(
         "--export",
-        choices=["json", "csv", "both"],
+        choices=["json", "csv", "html", "both", "all"],
         default=None,
-        help="Export scan results to JSON, CSV, or both (saved in scan_history/)",
+        help="Export scan results to JSON, CSV, HTML, or all formats (saved in scan_history/)",
     )
     parser.add_argument(
         "--history",
@@ -796,11 +858,23 @@ def main():
         json_path = scan_history.export_json(results, args.target, args.ports)
         print(f"\n💾 Scan saved to {json_path}")
 
-        if args.export in ("csv", "both"):
+        if args.export in ("csv", "both", "all"):
             csv_path = scan_history.export_csv(results, args.target, args.ports)
             print(f"💾 CSV exported to {csv_path}")
-        if args.export in ("json", "both"):
+        if args.export in ("json", "both", "all"):
             print(f"💾 JSON already saved above.")
+        if args.export in ("html", "all"):
+            print("\n🧾 Generating HTML security report...")
+            html_path = scan_history.export_html(
+                results,
+                args.target,
+                args.ports,
+                fill_missing_ai=not args.no_ai,
+                analysis_getter=(
+                    lambda svc: get_service_ai_analysis(svc, announce=False)
+                ) if not args.no_ai else None,
+            )
+            print(f"💾 HTML exported to {html_path}")
 
         if args.diff:
             try:

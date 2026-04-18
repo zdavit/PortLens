@@ -43,3 +43,9 @@
 - [x] Full AI HTML export — fill in missing per-service AI sections during HTML report generation
 - [x] Scrollable diff viewer — show full scan diffs inside the dashboard history flow
 - [x] Richer network map metadata — include highest risk plus vendor/MAC details when available
+- [x] Protocol-safe AI caching — keep TCP and UDP analyses distinct in the dashboard and HTML reports
+- [x] Deterministic scan normalization — merge overlapping port inputs, preserve non-contiguous chunks, and dedupe/sort final scan results
+- [x] Bounded AI summary prompts — cap whole-scan AI prompts to the highest-priority services and fail cleanly on oversized responses
+- [x] Smarter watch-mode history — only save automatic watch rescans when the results actually change
+- [x] IPv6 firewall parity — generate `ip6tables` suggestions for local IPv6 scans while keeping remote-host safeguards intact
+- [x] CLI HTML export — support `--export html` and `--export all` outside the interactive dashboard

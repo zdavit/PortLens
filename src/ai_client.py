@@ -5,12 +5,15 @@ import time
 import urllib.error
 import urllib.request
 
+from risk_model import RISK_PRIORITY
+
 
 logger = logging.getLogger("scanner")
 
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "llama3.2"
 AI_MAX_RESPONSE_BYTES = 1024 * 1024  # 1 MB
+AI_SUMMARY_SERVICE_LIMIT = 20
 
 _CONTROL_CHAR_KEEP_NL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
@@ -35,6 +38,42 @@ def _format_product_name(service):
     return product.strip() or "N/A"
 
 
+def _service_summary_sort_key(host_info, service):
+    return (
+        -RISK_PRIORITY.get(service.get("risk", "Unknown"), 0),
+        str(host_info.get("host", "")).lower(),
+        int(service.get("port", 0)),
+        service.get("protocol", "tcp"),
+        service.get("service", ""),
+        _format_product_name(service),
+    )
+
+
+def _summarize_services(results, limit=AI_SUMMARY_SERVICE_LIMIT):
+    flattened = []
+    for host_info in results:
+        for svc in host_info.get("services", []):
+            flattened.append((host_info, svc))
+
+    flattened.sort(key=lambda item: _service_summary_sort_key(*item))
+
+    lines = []
+    for host_info, svc in flattened[:limit]:
+        proto = svc.get("protocol", "tcp")
+        lines.append(
+            f"Host {host_info.get('host', 'unknown')} - Port {svc['port']}/{proto}: "
+            f"{svc['service']} ({_format_product_name(svc)}) - Risk: {svc['risk']}"
+        )
+
+    omitted = len(flattened) - len(lines)
+    if omitted > 0:
+        lines.append(
+            f"[Only the highest-priority {len(lines)} services are shown here. "
+            f"{omitted} additional open service(s) were omitted to keep the AI prompt bounded.]"
+        )
+    return lines
+
+
 def request_ai_response(prompt, announce_message=None):
     if announce_message:
         print(announce_message)
@@ -53,10 +92,30 @@ def request_ai_response(prompt, announce_message=None):
         ai_start = time.time()
         logger.debug("Sending AI request to %s", OLLAMA_API_URL)
         with urllib.request.urlopen(req, timeout=60) as resp:
+            headers = getattr(resp, "headers", None)
+            content_length = None
+            if headers is not None:
+                content_length = headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > AI_MAX_RESPONSE_BYTES:
+                        logger.warning(
+                            "AI response declared content length %s, exceeding %d bytes",
+                            content_length,
+                            AI_MAX_RESPONSE_BYTES,
+                        )
+                        raise AIAnalysisError(
+                            "Ollama returned too much data to display safely. Narrow the scan or use --no-ai."
+                        )
+                except ValueError:
+                    pass
+
             raw = resp.read(AI_MAX_RESPONSE_BYTES + 1)
             if len(raw) > AI_MAX_RESPONSE_BYTES:
-                logger.warning("AI response exceeded %d bytes, truncated", AI_MAX_RESPONSE_BYTES)
-                raw = raw[:AI_MAX_RESPONSE_BYTES]
+                logger.warning("AI response exceeded %d bytes", AI_MAX_RESPONSE_BYTES)
+                raise AIAnalysisError(
+                    "Ollama returned too much data to display safely. Narrow the scan or use --no-ai."
+                )
             data = json.loads(raw)
         logger.debug("AI response received in %.1f seconds", time.time() - ai_start)
     except urllib.error.URLError as exc:
@@ -76,13 +135,7 @@ def request_ai_response(prompt, announce_message=None):
 
 
 def get_ai_analysis(results, announce=True):
-    services_summary = []
-    for host_info in results:
-        for svc in host_info.get("services", []):
-            services_summary.append(
-                f"Port {svc['port']}: {svc['service']} "
-                f"({_format_product_name(svc)}) - Risk: {svc['risk']}"
-            )
+    services_summary = _summarize_services(results)
 
     if not services_summary:
         return "No open services found to analyze."

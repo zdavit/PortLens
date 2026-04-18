@@ -56,6 +56,7 @@ class DashboardApp:
         self.watch_interval = 60
         self.watch_timer = None
         self.watch_previous_results = None
+        self.scan_triggered_by_watch = False
         self._last_diff = ""
 
     def _safe_default_target(self):
@@ -105,13 +106,20 @@ class DashboardApp:
         return services[self.selected_index]
 
     def service_key(self, service):
-        return (service["host"], service["port"], service["service"], service.get("state", "open"))
+        return (
+            service["host"],
+            service["port"],
+            service.get("protocol", "tcp"),
+            service["service"],
+            service.get("state", "open"),
+        )
 
-    def start_scan(self):
+    def start_scan(self, triggered_by_watch=False):
         if self.running:
             return
 
         self.running = True
+        self.scan_triggered_by_watch = triggered_by_watch
         self.spinner_index = 0
         self.results = []
         self.error_message = ""
@@ -212,6 +220,7 @@ class DashboardApp:
             elif event == "results":
                 # Diff against previous results if watch mode is active
                 watch_alert = ""
+                changes = None
                 if self.watch_mode and self.watch_previous_results is not None:
                     diff = scan_history.diff_scans(self.watch_previous_results, payload)
                     changes = len(diff["opened"]) + len(diff["closed"]) + len(diff["risk_changes"])
@@ -233,15 +242,22 @@ class DashboardApp:
                 self.selected_index = 0
                 self.scroll_offset = 0
                 total_services = len(self.flatten_services())
-                try:
-                    path = scan_history.export_json(payload, self.target, self.ports)
-                    self.last_save_path = path
-                    save_msg = " Saved."
-                except OSError:
-                    save_msg = ""
+                should_save = True
+                if self.scan_triggered_by_watch and self.watch_previous_results is not None:
+                    should_save = bool(changes)
+
+                save_msg = ""
+                if should_save:
+                    try:
+                        path = scan_history.export_json(payload, self.target, self.ports)
+                        self.last_save_path = path
+                        save_msg = " Saved."
+                    except OSError:
+                        save_msg = ""
                 self.status_message = (
                     f"Scan finished: {len(payload)} host(s), {total_services} open service(s).{save_msg}{watch_alert}"
                 )
+                self.scan_triggered_by_watch = False
                 self.ensure_selected_analysis()
             elif event == "service_analysis":
                 key, analysis = payload
@@ -265,6 +281,7 @@ class DashboardApp:
                 self.status_message = "Scan failed."
             elif event == "done":
                 self.running = False
+                self.scan_triggered_by_watch = False
                 self.ensure_selected_analysis()
                 if self.watch_mode:
                     self.watch_timer = time.time() + self.watch_interval
@@ -357,7 +374,7 @@ class DashboardApp:
             if (self.watch_mode and not self.running
                     and self.watch_timer and time.time() >= self.watch_timer):
                 self.watch_timer = None
-                self.start_scan()
+                self.start_scan(triggered_by_watch=True)
 
             key = stdscr.getch()
             if key == -1:

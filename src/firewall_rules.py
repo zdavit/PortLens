@@ -1,6 +1,7 @@
 """Generate iptables and firewalld rules to close unnecessary open ports."""
 
 import contextlib
+import ipaddress
 import logging
 import socket
 
@@ -46,15 +47,26 @@ def _local_host_aliases():
                 if sockaddr:
                     aliases.add(sockaddr[0])
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
+    for family, endpoint in (
+        (socket.AF_INET, ("8.8.8.8", 80)),
+        (socket.AF_INET6, ("2001:4860:4860::8888", 80)),
+    ):
         with contextlib.suppress(OSError):
-            sock.connect(("8.8.8.8", 80))
-            aliases.add(sock.getsockname()[0])
-    finally:
-        sock.close()
+            sock = socket.socket(family, socket.SOCK_DGRAM)
+            try:
+                sock.connect(endpoint)
+                aliases.add(sock.getsockname()[0])
+            finally:
+                sock.close()
 
     return aliases
+
+
+def _iptables_binary_for_host(host):
+    try:
+        return "ip6tables" if ipaddress.ip_address(host).version == 6 else "iptables"
+    except ValueError:
+        return "iptables"
 
 
 def _remote_scan_warning(results):
@@ -104,7 +116,7 @@ def collect_blockable_services(results):
 
 
 def generate_iptables_rules(results):
-    """Generate iptables DROP rules for high/critical-risk open ports."""
+    """Generate iptables/ip6tables DROP rules for high/critical-risk open ports."""
     if _remote_scan_warning(results):
         return None
 
@@ -112,26 +124,40 @@ def generate_iptables_rules(results):
     if not services:
         return None
 
-    lines = [
-        "# iptables rules to block high-risk open ports",
-        "# Review each rule before applying — do NOT block ports you need!",
-        "",
-    ]
-    for svc in services:
-        proto = svc["protocol"] if svc["protocol"] in ALLOWED_PROTOCOLS else "tcp"
-        port = int(svc["port"])
-        comment = _safe_label(f"{svc['service']} ({svc['risk']})")
-        lines.append(
-            f"iptables -A INPUT -p {proto} --dport {port} "
-            f'-j DROP -m comment --comment "{comment}"'
-        )
+    sections = []
+    for binary in ("iptables", "ip6tables"):
+        matching = [svc for svc in services if _iptables_binary_for_host(svc["host"]) == binary]
+        if not matching:
+            continue
 
-    lines.append("")
-    lines.append("# Save rules (Debian/Ubuntu):")
-    lines.append("#   iptables-save > /etc/iptables/rules.v4")
-    lines.append("# Save rules (RHEL/Fedora):")
-    lines.append("#   iptables-save > /etc/sysconfig/iptables")
-    return "\n".join(lines)
+        lines = [
+            f"# {binary} rules to block high-risk open ports",
+            "# Review each rule before applying — do NOT block ports you need!",
+            "",
+        ]
+        for svc in matching:
+            proto = svc["protocol"] if svc["protocol"] in ALLOWED_PROTOCOLS else "tcp"
+            port = int(svc["port"])
+            comment = _safe_label(f"{svc['service']} ({svc['risk']})")
+            lines.append(
+                f"{binary} -A INPUT -p {proto} --dport {port} "
+                f'-j DROP -m comment --comment "{comment}"'
+            )
+
+        lines.append("")
+        if binary == "iptables":
+            lines.append("# Save rules (Debian/Ubuntu):")
+            lines.append("#   iptables-save > /etc/iptables/rules.v4")
+            lines.append("# Save rules (RHEL/Fedora):")
+            lines.append("#   iptables-save > /etc/sysconfig/iptables")
+        else:
+            lines.append("# Save IPv6 rules (Debian/Ubuntu):")
+            lines.append("#   ip6tables-save > /etc/iptables/rules.v6")
+            lines.append("# Save IPv6 rules (RHEL/Fedora):")
+            lines.append("#   ip6tables-save > /etc/sysconfig/ip6tables")
+        sections.append("\n".join(lines))
+
+    return "\n\n".join(sections) or None
 
 
 def generate_firewalld_rules(results):
@@ -194,7 +220,7 @@ def generate_rules_text(results):
     if iptables:
         parts.append("")
         parts.append("═" * 50)
-        parts.append("  iptables rules")
+        parts.append("  iptables / ip6tables rules")
         parts.append("═" * 50)
         parts.append(iptables)
     if firewalld:

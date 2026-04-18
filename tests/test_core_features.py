@@ -10,6 +10,7 @@ import urllib.error
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import ai_client
 import network_map
 import scan_history
 import scanner
@@ -26,8 +27,47 @@ class ScannerValidationTests(unittest.TestCase):
 
     def test_validate_ports_spec_normalizes_and_rejects_bad_input(self):
         self.assertEqual(scanner.validate_ports_spec("10-8, 443"), "8-10,443")
+        self.assertEqual(scanner.validate_ports_spec("22,22,20-25,23-24"), "20-25")
         with self.assertRaises(scanner.ScannerError):
             scanner.validate_ports_spec("0")
+
+    def test_chunk_port_spec_preserves_non_contiguous_ports(self):
+        self.assertEqual(scanner.chunk_port_spec("21-22,80", chunk_size=10), ["21-22,80"])
+
+    def test_finalize_results_sorts_hosts_and_dedupes_records(self):
+        results = [
+            {
+                "host": "2001:db8::2",
+                "hostname": "v6",
+                "state": "up",
+                "services": [
+                    {"port": 443, "protocol": "tcp", "state": "open", "service": "https", "product": "nginx", "version": "1.24", "risk": "Low"},
+                    {"port": 443, "protocol": "tcp", "state": "open", "service": "https", "product": "nginx", "version": "1.24", "risk": "Low"},
+                ],
+                "ports": [
+                    {"port": 443, "protocol": "tcp", "state": "open", "service": "https", "product": "nginx", "version": "1.24", "risk": "Low"},
+                    {"port": 80, "protocol": "tcp", "state": "open", "service": "http", "product": "nginx", "version": "1.24", "risk": "Low"},
+                    {"port": 443, "protocol": "tcp", "state": "open", "service": "https", "product": "nginx", "version": "1.24", "risk": "Low"},
+                ],
+            },
+            {
+                "host": "10.0.0.5",
+                "hostname": "v4",
+                "state": "up",
+                "services": [
+                    {"port": 22, "protocol": "tcp", "state": "open", "service": "ssh", "product": "OpenSSH", "version": "9.6", "risk": "Medium"},
+                ],
+                "ports": [
+                    {"port": 22, "protocol": "tcp", "state": "open", "service": "ssh", "product": "OpenSSH", "version": "9.6", "risk": "Medium"},
+                ],
+            },
+        ]
+
+        finalized = scanner._finalize_results(results)
+
+        self.assertEqual([host["host"] for host in finalized], ["10.0.0.5", "2001:db8::2"])
+        self.assertEqual([port["port"] for port in finalized[1]["ports"]], [80, 443])
+        self.assertEqual(len(finalized[1]["services"]), 1)
 
     def test_get_default_target_uses_ipv6_prefix_when_local_ip_is_v6(self):
         with mock.patch("scanner.get_local_ip", return_value="2001:db8::1234"):
@@ -73,6 +113,52 @@ class ScannerRiskAndAiTests(unittest.TestCase):
         ):
             with self.assertRaises(scanner.AIAnalysisError):
                 scanner.request_ai_response("prompt")
+
+    def test_request_ai_response_rejects_oversized_payloads(self):
+        payload = b"x" * (ai_client.AI_MAX_RESPONSE_BYTES + 1)
+
+        class FakeResponse:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, _size=-1):
+                return payload
+
+        with mock.patch("ai_client.urllib.request.urlopen", return_value=FakeResponse()):
+            with self.assertRaises(scanner.AIAnalysisError) as ctx:
+                scanner.request_ai_response("prompt")
+
+        self.assertIn("too much data", str(ctx.exception))
+
+    def test_get_ai_analysis_limits_prompt_to_highest_priority_services(self):
+        results = [{
+            "host": "host-a",
+            "services": [
+                {"port": 6000 + idx, "protocol": "tcp", "service": f"svc-{idx}", "product": "prod", "version": "1.0", "risk": "Low"}
+                for idx in range(ai_client.AI_SUMMARY_SERVICE_LIMIT)
+            ] + [
+                {"port": 6379, "protocol": "tcp", "service": "redis", "product": "Redis", "version": "7.0", "risk": "Critical"},
+            ],
+        }]
+
+        captured = {}
+
+        def fake_request(prompt, announce_message=None):
+            captured["prompt"] = prompt
+            return "analysis"
+
+        with mock.patch("ai_client.request_ai_response", side_effect=fake_request):
+            text = scanner.get_ai_analysis(results, announce=False)
+
+        self.assertEqual(text, "analysis")
+        self.assertIn("Port 6379/tcp: redis", captured["prompt"])
+        self.assertNotIn(f"svc-{ai_client.AI_SUMMARY_SERVICE_LIMIT - 1}", captured["prompt"])
+        self.assertIn("additional open service(s) were omitted", captured["prompt"])
 
 
 class HistoryExportTests(unittest.TestCase):
@@ -158,7 +244,7 @@ class HistoryExportTests(unittest.TestCase):
         }]
 
         ai_cache = {
-            ("127.0.0.1", 22, "ssh", "open"): "Overview: cached",
+            ("127.0.0.1", 22, "tcp", "ssh", "open"): "Overview: cached",
         }
         calls = []
 
@@ -183,6 +269,44 @@ class HistoryExportTests(unittest.TestCase):
         self.assertIn("Overview: cached", text)
         self.assertIn("Overview: generated for 443", text)
         self.assertIn("https&lt;script&gt;", text)
+
+    def test_list_history_skips_invalid_and_oversized_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            valid_path = Path(tmpdir) / "valid.json"
+            valid_path.write_text(json.dumps({
+                "timestamp": "2026-01-01_00-00-00",
+                "target": "localhost",
+                "ports": "22",
+                "hosts": [],
+            }))
+            (Path(tmpdir) / "invalid.json").write_text("not json")
+            (Path(tmpdir) / "oversized.json").write_text("{}")
+
+            real_getsize = scan_history.os.path.getsize
+
+            def fake_getsize(path):
+                if path.endswith("oversized.json"):
+                    return scan_history.MAX_SCAN_FILE_BYTES + 1
+                return real_getsize(path)
+
+            with mock.patch.object(scan_history, "HISTORY_DIR", tmpdir), \
+                 mock.patch("scan_history.os.path.getsize", side_effect=fake_getsize):
+                entries = scan_history.list_history()
+
+        self.assertEqual([entry["filename"] for entry in entries], ["valid.json"])
+
+    def test_main_supports_html_export(self):
+        results = [{"host": "127.0.0.1", "hostname": "localhost", "state": "up", "services": [], "ports": []}]
+
+        with mock.patch.object(sys, "argv", ["scanner.py", "localhost", "--export", "html", "--no-ai"]), \
+             mock.patch("scanner.scan_network", return_value=results), \
+             mock.patch("scanner.print_results"), \
+             mock.patch("scan_history.export_json", return_value="scan.json"), \
+             mock.patch("scan_history.export_html", return_value="scan.html") as export_html:
+            exit_code = scanner.main()
+
+        self.assertEqual(exit_code, 0)
+        export_html.assert_called_once()
 
 
 class NetworkMapTests(unittest.TestCase):

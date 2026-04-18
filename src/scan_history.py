@@ -109,8 +109,14 @@ def list_history():
     for fname in files:
         fpath = os.path.join(HISTORY_DIR, fname)
         try:
+            file_size = os.path.getsize(fpath)
+            if file_size > MAX_SCAN_FILE_BYTES:
+                raise OSError(
+                    f"Scan file too large ({file_size} bytes, max {MAX_SCAN_FILE_BYTES})."
+                )
             with open(fpath) as f:
                 data = json.load(f)
+            _validate_scan_schema(data)
             entries.append({
                 "filename": fname,
                 "filepath": fpath,
@@ -122,7 +128,8 @@ def list_history():
                     len(h.get("services", [])) for h in data.get("hosts", [])
                 ),
             })
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            logger.warning("Skipping invalid history file %s: %s", fpath, exc)
             continue
     return entries
 
@@ -275,7 +282,13 @@ _RISK_COLORS = {
 
 
 def _analysis_cache_key(host, service):
-    return (host, service["port"], service["service"], service.get("state", "open"))
+    return (
+        host,
+        service["port"],
+        service.get("protocol", "tcp"),
+        service["service"],
+        service.get("state", "open"),
+    )
 
 
 def populate_ai_cache(results, ai_cache=None, analysis_getter=None):
