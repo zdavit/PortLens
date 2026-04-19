@@ -1,10 +1,10 @@
-# Smart Network Scanner
+# PortLens
 
-A CLI tool that scans your local network for open ports and running services, then uses a local AI model (Ollama + llama3.2) to explain potential security risks in plain language.
+PortLens is a CLI tool that scans your local network for open ports and running services, then uses a local AI model (Ollama + llama3.2) to explain potential security risks in plain language.
 
 ## Proposal
 
-I am building a smart network scanner that analyzes a target system or local network to identify open ports and running services, then uses an AI model to explain potential security risks in a clear and accessible way. The tool will perform service detection using a network scanning library and present results through a simple interface. Key features will include identifying open ports, mapping them to known services (such as SSH or HTTP), assigning a basic risk level, and generating AI-powered explanations of what each service does, why it could be a vulnerability, and how it might be secured. The goal is to turn raw technical scan data into meaningful security insights that are easy to understand and demonstrate.
+I am building PortLens, a smart network scanner that analyzes a target system or local network to identify open ports and running services, then uses an AI model to explain potential security risks in a clear and accessible way. The tool will perform service detection using a network scanning library and present results through a simple interface. Key features will include identifying open ports, mapping them to known services (such as SSH or HTTP), assigning a basic risk level, and generating AI-powered explanations of what each service does, why it could be a vulnerability, and how it might be secured. The goal is to turn raw technical scan data into meaningful security insights that are easy to understand and demonstrate.
 
 To build this project, I will speak to the agent in a question-answer type of feedback to iteratively generate, test, and refine the application. The agent will be guided by structured prompts to implement features step-by-step, and I will provide feedback based on runtime behavior, error messages, and expected outputs. Feedback mechanisms will include testing scans on known targets (such as localhost), validating that detected services match expected results, and ensuring the AI explanations are accurate and relevant. I will also use the agent to review and improve code structure, readability, and documentation, allowing for continuous refinement and a higher-quality final product.
 
@@ -13,6 +13,10 @@ To build this project, I will speak to the agent in a question-answer type of fe
 So far AMP has been pretty helpful and smart about its ideas and suggestions. Everything works pretty well but there's still a vast amount of things I want done before I'm satisfied. The port scanning works well and the toggles for open and closed ports work too. The local Ollama ai gives good suggestions and when it summarizes the port stuff it is pretty information dense. For next week I want more features like network device mapping and potentially expanding this to be a web interface instead of just CLI (even though CLIs are just awesome).
 
 I haven't really thrown anything super complicated at the AI so far so it's been able to handle most things. Therefore I can't really speak on the "smartest" or "dumbest" things its done because those things aren't very far apart in terms of complexity. https://ampcode.com/threads/T-019d7017-01e5-779d-bd5a-1553cde7fcfb Here is the main thread I've been working with it and its been pretty easy. I've chosen to not use agentic looping since that was a real pain last time and instead just talk to AMP normally, I've found that that has been a good way to work with it. 
+
+## Week 14
+
+- Demo video: https://youtu.be/9PS6Ip5TzUY
 
 ## Features
 
@@ -27,12 +31,12 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 - **Interactive curses dashboard** — full-screen terminal UI with live scanning, service browsing, and inline AI analysis
 - **Port range presets** — quick menu with common ranges (1-100, 1-1024, 1-10000, all ports, common services) plus custom input
 - **Scan history** — every scan auto-saves to `scan_history/` as JSON for future reference
-- **CSV/JSON export** — export results on demand for external analysis or reporting
+- **JSON/CSV/HTML export** — export results and reports on demand from the CLI or dashboard
 - **Scan diffing** — compare current results against any previous scan to see new/closed TCP vs UDP services and risk changes
 - **Structured logging** — all scan activity, timing, errors, and AI requests logged to `logs/`
 - **Friendly error handling** — clear messages when nmap or Ollama are unavailable instead of crashes
 - **Localhost validation script** — automated testing of scan output against expected services
-- **Firewall rule suggestions** — generate `iptables` and `firewalld` rules to block high/critical-risk open ports for this machine only (`g` key in dashboard, `--firewall` flag in CLI)
+- **Firewall rule suggestions** — generate `iptables`, `ip6tables`, and `firewalld` rules to block high/critical-risk open ports for this machine only (`g` key in dashboard, `--firewall` flag in CLI)
 - **HTML report export** — self-contained HTML security report with scores, port tables, and complete per-service AI analysis (`x` key in dashboard)
 - **IPv4 + IPv6 aware defaults** — automatic target detection, subnet validation, and host sorting now handle both IPv4 and IPv6 targets safely
 - **Deterministic scan normalization** — overlapping port inputs are merged, non-contiguous ranges stay exact, and final host/service rows are sorted and deduplicated before display/export
@@ -47,14 +51,18 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 
 ```
 src/
-  scanner.py          # Core scanner, normalization helpers, and CLI entry point
+  scanner.py          # Scan orchestration, target/port validation, and CLI entry point
   ai_client.py        # Ollama request handling and AI prompt generation
   risk_model.py       # Risk classification, exposure tags, and host scoring
-  network_map.py      # Host discovery (ping sweep) and OS-detection mapping
-  interactive_cli.py  # Full-screen curses dashboard
-  scan_history.py     # JSON/CSV/HTML export, history listing, scan diffing
+  network_map.py      # Host discovery, OS guessing, and subnet mapping
+  interactive_cli.py  # Full-screen curses dashboard, watch mode, and viewers
+  scan_history.py     # JSON/CSV/HTML export, history browsing, and diffing
   firewall_rules.py   # iptables/ip6tables/firewalld rule generation for risky ports
   validate_localhost.py  # Automated validation script
+tests/                # Core feature and regression test suite
+README.md             # Project overview, usage, and demo guidance
+TODO.md               # Completed work and remaining ideas
+requirements.txt      # Python dependency pinning
 logs/                 # Debug/error logs (gitignored)
 scan_history/         # Saved scan results and reports (gitignored)
 venv/                 # Python virtual environment (gitignored)

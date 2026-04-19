@@ -747,7 +747,7 @@ def print_results(results):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Smart Network Scanner - Scan your local network and get AI-powered security insights"
+        description="PortLens - Scan your local network and get AI-powered security insights"
     )
     parser.add_argument(
         "target",
@@ -798,7 +798,7 @@ def main():
     parser.add_argument(
         "--firewall",
         action="store_true",
-        help="Generate iptables/firewalld rules to block high-risk open ports",
+        help="Generate iptables, ip6tables, or firewalld rules to block high-risk open ports",
     )
     parser.add_argument(
         "--udp",

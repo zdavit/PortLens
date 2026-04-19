@@ -923,7 +923,7 @@ class DashboardApp:
             stdscr.refresh()
             return
 
-        header = " Smart Network Scanner Dashboard "
+        header = " PortLens Dashboard "
         scan_state = "IDLE"
         if self.running:
             scan_state = f"SCANNING {SPINNER_FRAMES[self.spinner_index]}"
