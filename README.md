@@ -16,7 +16,7 @@ I haven't really thrown anything super complicated at the AI so far so it's been
 
 ## Week 14
 
-- Demo video: https://youtu.be/9PS6Ip5TzUY
+[![Watch the demo](https://img.youtube.com/vi/9PS6Ip5TzUY/hqdefault.jpg)](https://youtu.be/9PS6Ip5TzUY)
 
 The project has developed a lot more than what the original proposal suggested it to be. It has an interactive CLI, network device mapping, scan history and diffing, host scoring and exposuse summaries, and many other features that I did not plan originally. It deviates from the web dashboard for now but I will be implementing that later on after the class ends. It also was suposed to be a "simple interface" and it still retains that but it has just grown in complexity depending on how much the user really want to dive into it. Overall it met the goals but it very far exceeded it and I plan to further improve and expand the project after the class is over.
 
