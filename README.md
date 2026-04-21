@@ -2,23 +2,7 @@
 
 PortLens is a CLI tool that scans your local network for open ports and running services, then uses a local AI model (Ollama + llama3.2) to explain potential security risks in plain language.
 
-## Proposal
-
-I am building PortLens, a smart network scanner that analyzes a target system or local network to identify open ports and running services, then uses an AI model to explain potential security risks in a clear and accessible way. The tool will perform service detection using a network scanning library and present results through a simple interface. Key features will include identifying open ports, mapping them to known services (such as SSH or HTTP), assigning a basic risk level, and generating AI-powered explanations of what each service does, why it could be a vulnerability, and how it might be secured. The goal is to turn raw technical scan data into meaningful security insights that are easy to understand and demonstrate.
-
-To build this project, I will speak to the agent in a question-answer type of feedback to iteratively generate, test, and refine the application. The agent will be guided by structured prompts to implement features step-by-step, and I will provide feedback based on runtime behavior, error messages, and expected outputs. Feedback mechanisms will include testing scans on known targets (such as localhost), validating that detected services match expected results, and ensuring the AI explanations are accurate and relevant. I will also use the agent to review and improve code structure, readability, and documentation, allowing for continuous refinement and a higher-quality final product.
-
-## Week 13
-
-So far AMP has been pretty helpful and smart about its ideas and suggestions. Everything works pretty well but there's still a vast amount of things I want done before I'm satisfied. The port scanning works well and the toggles for open and closed ports work too. The local Ollama ai gives good suggestions and when it summarizes the port stuff it is pretty information dense. For next week I want more features like network device mapping and potentially expanding this to be a web interface instead of just CLI (even though CLIs are just awesome).
-
-I haven't really thrown anything super complicated at the AI so far so it's been able to handle most things. Therefore I can't really speak on the "smartest" or "dumbest" things its done because those things aren't very far apart in terms of complexity. https://ampcode.com/threads/T-019d7017-01e5-779d-bd5a-1553cde7fcfb Here is the main thread I've been working with it and its been pretty easy. I've chosen to not use agentic looping since that was a real pain last time and instead just talk to AMP normally, I've found that that has been a good way to work with it. 
-
-## Week 14
-
 [![Watch the demo](https://img.youtube.com/vi/9PS6Ip5TzUY/hqdefault.jpg)](https://youtu.be/9PS6Ip5TzUY)
-
-The project has developed a lot more than what the original proposal suggested it to be. It has an interactive CLI, network device mapping, scan history and diffing, host scoring and exposuse summaries, and many other features that I did not plan originally. It deviates from the web dashboard for now but I will be implementing that later on after the class ends. It also was suposed to be a "simple interface" and it still retains that but it has just grown in complexity depending on how much the user really want to dive into it. Overall it met the goals but it very far exceeded it and I plan to further improve and expand the project after the class is over.
 
 ## Features
 
