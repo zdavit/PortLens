@@ -49,3 +49,4 @@
 - [x] Smarter watch-mode history — only save automatic watch rescans when the results actually change
 - [x] IPv6 firewall parity — generate `ip6tables` suggestions for local IPv6 scans while keeping remote-host safeguards intact
 - [x] CLI HTML export — support `--export html` and `--export all` outside the interactive dashboard
+- [x] Port-aware risk inference — use common port behavior and product fingerprints to classify `unknown` / `tcpwrapped` services more accurately

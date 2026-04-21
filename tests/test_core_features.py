@@ -78,6 +78,24 @@ class ScannerRiskAndAiTests(unittest.TestCase):
     def test_version_override_applies_to_https_nginx(self):
         self.assertEqual(scanner.classify_risk("https", "nginx", "1.16.1"), "Medium")
 
+    def test_port_hint_raises_unknown_redis_port_to_critical(self):
+        self.assertEqual(
+            scanner.classify_risk("unknown", port=6379, protocol="tcp"),
+            "Critical",
+        )
+
+    def test_tcpwrapped_ssh_port_uses_port_context(self):
+        self.assertEqual(
+            scanner.classify_risk("tcpwrapped", port=22, protocol="tcp"),
+            "Medium",
+        )
+
+    def test_product_hint_applies_version_override_for_mariadb(self):
+        self.assertEqual(
+            scanner.classify_risk("unknown", "MariaDB", "5.5.68", port=3306, protocol="tcp"),
+            "Critical",
+        )
+
     def test_host_score_includes_exposure_penalties(self):
         host_info = {
             "services": [

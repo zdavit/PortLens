@@ -524,7 +524,7 @@ def _add_closed_port_samples(entry, chunk_spec, scan_mode, ignored_states):
                 "service": service_name,
                 "product": "",
                 "version": "",
-                "risk": classify_risk(service_name),
+                "risk": classify_risk(service_name, port=port, protocol=protocol),
             })
             remaining -= 1
             if remaining <= 0:
@@ -578,7 +578,13 @@ def _parse_nmap_host(nm, host):
                 "service": service_name,
                 "product": product,
                 "version": version,
-                "risk": classify_risk(service_name, product, version),
+                "risk": classify_risk(
+                    service_name,
+                    product,
+                    version,
+                    port=port,
+                    protocol=proto,
+                ),
             }
             host_info["ports"].append(port_record)
             if port_record["state"] == "open":

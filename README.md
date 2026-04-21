@@ -12,6 +12,7 @@ PortLens is a CLI tool that scans your local network for open ports and running 
 - **Target input validation** — rejects shell characters, nmap option injection, and overly broad subnets before scanning
 - **Full port scanning** — scan any range up to all 65535 ports with parallel chunked nmap (8 concurrent workers, `-T4`, `--min-rate 300`, `-sV`)
 - **70+ service risk classifications** — covers remote access, web, databases, file sharing, printing, DNS, RPC, containers, and more
+- **Port-aware risk inference** — when nmap reports `unknown` or `tcpwrapped`, PortLens now falls back to common port behavior and banner fingerprints to classify likely services more accurately
 - **Version-aware risk overrides** — outdated software (e.g., OpenSSH < 8.0, MySQL < 8.0, PostgreSQL < 13) is automatically escalated to a higher risk level
 - **AI-powered security analysis** — per-service explanations with Overview, What is this, Risks, and Actions sections powered by Ollama + llama3.2
 - **Interactive curses dashboard** — full-screen terminal UI with live scanning, service browsing, and inline AI analysis
@@ -134,7 +135,7 @@ Services are classified into four risk levels based on the service type and dete
 | **Medium** | Orange | SSH (current), SMTP, DNS, RPC, tcpwrapped, unidentified services |
 | **Low** | Green | HTTP/HTTPS, LLMNR, mDNS, IPP/CUPS printing |
 
-Version-aware overrides automatically escalate risk when outdated software is detected (e.g., OpenSSH < 8.0, Apache < 2.4, nginx < 1.18, Samba < 4.15, vsftpd < 3.0). Whole-scan AI summaries are automatically limited to the highest-priority services so large subnet scans do not overwhelm the local model.
+Version-aware overrides automatically escalate risk when outdated software is detected (e.g., OpenSSH < 8.0, Apache < 2.4, nginx < 1.18, Samba < 4.15, vsftpd < 3.0). When nmap returns vague banners like `unknown` or `tcpwrapped`, PortLens also uses the port number plus detected product strings to infer likely services such as SSH, Redis, MySQL/MariaDB, PostgreSQL, HTTPS, SMB, and Docker before assigning risk. Whole-scan AI summaries are automatically limited to the highest-priority services so large subnet scans do not overwhelm the local model.
 
 ## Validation
 

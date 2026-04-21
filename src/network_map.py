@@ -142,7 +142,13 @@ def scan_network_map(target, progress_callback=None):
                     version = scanner.sanitize_banner(port_info.get("version", ""))
                     open_services.append({
                         "service": service_name,
-                        "risk": scanner.classify_risk(service_name, product, version),
+                        "risk": scanner.classify_risk(
+                            service_name,
+                            product,
+                            version,
+                            port=port,
+                            protocol=proto,
+                        ),
                     })
 
         top_risk = scanner.highest_risk_level(open_services) if open_services else "Unknown"

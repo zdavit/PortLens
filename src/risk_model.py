@@ -100,6 +100,107 @@ RISK_LEVELS = {
 }
 
 
+SERVICE_NAME_ALIASES = {
+    "ssl/http": "https",
+    "ssl|http": "https",
+    "https-alt": "https",
+    "ms-sql": "ms-sql-s",
+    "mssql": "ms-sql-s",
+    "rdp": "ms-wbt-server",
+    "smb": "microsoft-ds",
+}
+
+PRODUCT_SERVICE_PATTERNS = [
+    ("openssh", "ssh"),
+    ("dropbear", "ssh"),
+    ("redis", "redis"),
+    ("postgresql", "postgresql"),
+    ("postgres", "postgresql"),
+    ("mariadb", "mysql"),
+    ("mysql", "mysql"),
+    ("mongodb", "mongodb"),
+    ("memcached", "memcached"),
+    ("elasticsearch", "elasticsearch"),
+    ("couchdb", "couchdb"),
+    ("samba", "microsoft-ds"),
+    ("microsoft sql", "ms-sql-s"),
+    ("sql server", "ms-sql-s"),
+    ("openldap", "ldap"),
+    ("docker", "docker"),
+    ("mosquitto", "mqtt"),
+    ("rabbitmq", "amqp"),
+    ("bind", "domain"),
+    ("dnsmasq", "domain"),
+    ("unbound", "domain"),
+    ("vsftpd", "ftp"),
+    ("proftpd", "ftp"),
+    ("pure-ftpd", "ftp"),
+    ("nginx", "http"),
+    ("apache", "http"),
+    ("caddy", "http"),
+    ("lighttpd", "http"),
+    ("iis", "http"),
+]
+
+PORT_SERVICE_HINTS = {
+    ("tcp", 21): "ftp",
+    ("tcp", 22): "ssh",
+    ("tcp", 23): "telnet",
+    ("tcp", 25): "smtp",
+    ("tcp", 53): "domain",
+    ("udp", 53): "domain",
+    ("tcp", 80): "http",
+    ("tcp", 88): "kerberos",
+    ("udp", 88): "kerberos",
+    ("tcp", 110): "pop3",
+    ("tcp", 111): "rpcbind",
+    ("udp", 111): "rpcbind",
+    ("tcp", 123): "ntp",
+    ("udp", 123): "ntp",
+    ("tcp", 135): "msrpc",
+    ("tcp", 139): "netbios-ssn",
+    ("udp", 137): "netbios-ns",
+    ("udp", 138): "nbdgram",
+    ("tcp", 143): "imap",
+    ("udp", 161): "snmp",
+    ("udp", 162): "snmp",
+    ("tcp", 389): "ldap",
+    ("udp", 389): "ldap",
+    ("tcp", 443): "https",
+    ("tcp", 445): "microsoft-ds",
+    ("tcp", 465): "submission",
+    ("tcp", 514): "syslog",
+    ("udp", 514): "syslog",
+    ("tcp", 587): "submission",
+    ("tcp", 631): "ipp",
+    ("udp", 631): "ipp",
+    ("tcp", 636): "ldap",
+    ("tcp", 873): "ftp",
+    ("tcp", 993): "imap",
+    ("tcp", 995): "pop3",
+    ("udp", 1194): "openvpn",
+    ("tcp", 1433): "ms-sql-s",
+    ("udp", 1434): "ms-sql-s",
+    ("udp", 1900): "ssdp",
+    ("tcp", 3306): "mysql",
+    ("tcp", 3389): "ms-wbt-server",
+    ("tcp", 5432): "postgresql",
+    ("tcp", 5900): "vnc",
+    ("tcp", 5985): "http",
+    ("tcp", 5986): "https",
+    ("tcp", 6379): "redis",
+    ("tcp", 6443): "https",
+    ("tcp", 8080): "http-alt",
+    ("tcp", 8443): "https",
+    ("tcp", 9200): "elasticsearch",
+    ("tcp", 1883): "mqtt",
+    ("tcp", 2375): "docker",
+    ("tcp", 2376): "docker",
+    ("tcp", 27017): "mongodb",
+    ("tcp", 5000): "http-alt",
+}
+
+
 def _version_lt(version_string, threshold):
     nums = re.findall(r"\d+", version_string)
     thresh_nums = re.findall(r"\d+", threshold)
@@ -150,19 +251,67 @@ VERSION_RISK_OVERRIDES = {
 }
 
 
-def classify_risk(service_name, product="", version=""):
-    if not service_name or service_name in ("", "unknown"):
+def _normalize_service_name(service_name):
+    normalized = (service_name or "").strip().lower()
+    return SERVICE_NAME_ALIASES.get(normalized, normalized)
+
+
+def _product_hint_service(product="", version="", port=None, protocol="tcp"):
+    haystack = f"{product} {version}".strip().lower()
+    for needle, inferred_service in PRODUCT_SERVICE_PATTERNS:
+        if needle in haystack:
+            if inferred_service == "http" and port in (443, 5986, 6443, 8443):
+                return "https"
+            return inferred_service
+    return PORT_SERVICE_HINTS.get(((protocol or "tcp").lower(), port))
+
+
+def _infer_service_name(service_name, product="", version="", port=None, protocol="tcp"):
+    normalized = _normalize_service_name(service_name)
+    if normalized in RISK_LEVELS and normalized not in ("unknown", "tcpwrapped"):
+        return normalized
+
+    if normalized and normalized not in ("unknown", "tcpwrapped"):
+        prefix = normalized.split("/", 1)[0]
+        if prefix in RISK_LEVELS:
+            return prefix
+
+    hinted_service = _product_hint_service(product, version, port=port, protocol=protocol)
+    if hinted_service:
+        logger.debug(
+            "Inferred service %s from port/product context: service=%r product=%r version=%r port=%r/%s",
+            hinted_service,
+            service_name,
+            product,
+            version,
+            port,
+            protocol,
+        )
+        return hinted_service
+
+    return normalized
+
+
+def classify_risk(service_name, product="", version="", port=None, protocol="tcp"):
+    normalized_service = _infer_service_name(
+        service_name,
+        product=product,
+        version=version,
+        port=port,
+        protocol=protocol,
+    )
+    if not normalized_service or normalized_service == "unknown":
         return "Medium"
 
-    base_risk = RISK_LEVELS.get(service_name, "Unknown")
+    base_risk = RISK_LEVELS.get(normalized_service, "Unknown")
     full_version = f"{product} {version}".strip()
 
-    overrides = VERSION_RISK_OVERRIDES.get(service_name, [])
+    overrides = VERSION_RISK_OVERRIDES.get(normalized_service, [])
     for check_fn, override_risk, reason in overrides:
         if full_version and check_fn(full_version):
             logger.debug(
                 "Risk override for %s (%s): %s -> %s (%s)",
-                service_name, full_version, base_risk, override_risk, reason,
+                normalized_service, full_version, base_risk, override_risk, reason,
             )
             return override_risk
 
